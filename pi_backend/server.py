@@ -1,8 +1,10 @@
 import json
 import os
+import re
 import sqlite3
 import uuid
 from base64 import urlsafe_b64decode
+from hashlib import sha256
 from pathlib import Path
 
 import faiss
@@ -72,6 +74,10 @@ class EngagementEventCreateRequest(BaseModel):
     metadata: dict | None = None
 
 
+class TrainingConsentUpdateRequest(BaseModel):
+    enabled: bool
+
+
 def now_iso() -> str:
     return __import__("datetime").datetime.utcnow().isoformat() + "Z"
 
@@ -128,6 +134,7 @@ def init_db() -> None:
             """
         )
         ensure_column(conn, "conversations", "owner_identity", "TEXT NOT NULL DEFAULT 'local'")
+        ensure_column(conn, "conversations", "training_consent", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "engagement_events", "user_identity", "TEXT NOT NULL DEFAULT 'local'")
 
 
@@ -208,6 +215,7 @@ def serialize_conversation(row: sqlite3.Row, messages: list[dict]) -> dict:
         "title": row["title"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
+        "trainingConsent": bool(row["training_consent"]),
         "messages": messages,
     }
 
@@ -216,7 +224,7 @@ def list_conversations_with_messages(user_identity: str) -> list[dict]:
     with get_db() as conn:
         conversations = conn.execute(
             """
-            SELECT id, title, owner_identity, created_at, updated_at
+            SELECT id, title, owner_identity, training_consent, created_at, updated_at
             FROM conversations
             WHERE owner_identity = ?
             ORDER BY updated_at DESC, created_at DESC
@@ -340,6 +348,32 @@ def ui_index_response():
     )
 
 
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+PHONE_PATTERN = re.compile(r"\b(?:\+?\d[\d\s().-]{7,}\d)\b")
+
+
+def redact_pii(text: str) -> str:
+    redacted = EMAIL_PATTERN.sub("[REDACTED_EMAIL]", text)
+    redacted = PHONE_PATTERN.sub("[REDACTED_PHONE]", redacted)
+    return redacted
+
+
+def check_export_token(request: Request) -> None:
+    expected = os.getenv("ADMIN_EXPORT_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Training export token not configured")
+
+    header = request.headers.get("authorization", "")
+    token = header.removeprefix("Bearer ").strip()
+    if token != expected:
+        raise HTTPException(status_code=403, detail="Invalid export token")
+
+
+def stable_identity_hash(identity: str) -> str:
+    salt = os.getenv("TRAINING_EXPORT_SALT", "agility-training")
+    return sha256(f"{salt}:{identity}".encode("utf-8")).hexdigest()
+
+
 init_db()
 migrate_legacy_conversations()
 
@@ -355,6 +389,38 @@ def list_conversations(request: Request):
     return list_conversations_with_messages(user_identity)
 
 
+@app.get("/users/me/training-consent")
+def get_training_consent(request: Request):
+    user_identity = resolve_user_identity(request)
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(training_consent) AS enabled
+            FROM conversations
+            WHERE owner_identity = ?
+            """,
+            (user_identity,),
+        ).fetchone()
+
+    return {"enabled": bool(row["enabled"]) if row and row["enabled"] is not None else False}
+
+
+@app.patch("/users/me/training-consent")
+def set_training_consent(req: TrainingConsentUpdateRequest, request: Request):
+    user_identity = resolve_user_identity(request)
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE conversations
+            SET training_consent = ?, updated_at = ?
+            WHERE owner_identity = ?
+            """,
+            (1 if req.enabled else 0, now_iso(), user_identity),
+        )
+
+    return {"enabled": req.enabled}
+
+
 @app.post("/conversations")
 def create_conversation(req: ConversationCreateRequest, request: Request):
     conversation_id = str(uuid.uuid4())
@@ -362,12 +428,21 @@ def create_conversation(req: ConversationCreateRequest, request: Request):
     user_identity = resolve_user_identity(request)
 
     with get_db() as conn:
+        consent_row = conn.execute(
+            """
+            SELECT MAX(training_consent) AS enabled
+            FROM conversations
+            WHERE owner_identity = ?
+            """,
+            (user_identity,),
+        ).fetchone()
+        default_consent = bool(consent_row["enabled"]) if consent_row and consent_row["enabled"] is not None else False
         conn.execute(
             """
-            INSERT INTO conversations (id, title, owner_identity, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, title, owner_identity, training_consent, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (conversation_id, req.title or "New conversation", user_identity, timestamp, timestamp),
+            (conversation_id, req.title or "New conversation", user_identity, 1 if default_consent else 0, timestamp, timestamp),
         )
 
     return get_conversation_for_user(conversation_id, user_identity)
@@ -436,6 +511,45 @@ def append_message(req: MessageCreateRequest, request: Request):
         "createdAt": req.createdAt,
         "conversationTitle": conversation_title,
     }
+
+
+@app.get("/admin/training-export")
+def export_training_dataset(request: Request):
+    check_export_token(request)
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                c.id AS conversation_id,
+                c.owner_identity,
+                c.created_at AS conversation_created_at,
+                m.id AS message_id,
+                m.role,
+                m.content,
+                m.created_at AS message_created_at
+            FROM conversations c
+            JOIN messages m ON m.conversation_id = c.id
+            WHERE c.training_consent = 1
+            ORDER BY c.created_at ASC, m.created_at ASC
+            """
+        ).fetchall()
+
+    records = []
+    for row in rows:
+        records.append(
+            {
+                "conversation_id": row["conversation_id"],
+                "user_hash": stable_identity_hash(row["owner_identity"]),
+                "conversation_created_at": row["conversation_created_at"],
+                "message_id": row["message_id"],
+                "role": row["role"],
+                "content": redact_pii(row["content"]),
+                "message_created_at": row["message_created_at"],
+            }
+        )
+
+    return {"count": len(records), "records": records}
 
 
 @app.post("/engagement")
