@@ -5,6 +5,7 @@ export function useChat() {
   const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [draft, setDraft] = useState('');
 
   useEffect(() => {
     async function init() {
@@ -25,6 +26,16 @@ export function useChat() {
     const created = await conversationService.create();
     setConversations((prev) => [created, ...prev]);
     setActiveConversationId(created.id);
+    return created;
+  }
+
+  function applyConversationTitle(conversationId, title) {
+    if (!title) return;
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, title } : conversation,
+      ),
+    );
   }
 
   async function renameConversation(conversationId, title) {
@@ -38,13 +49,23 @@ export function useChat() {
 
   async function deleteConversation(conversationId) {
     await conversationService.remove(conversationId);
-    setConversations((prev) => prev.filter((conversation) => conversation.id !== conversationId));
-    setActiveConversationId((prev) => (prev === conversationId ? conversations[0]?.id || null : prev));
+    setConversations((prev) => {
+      const nextConversations = prev.filter((conversation) => conversation.id !== conversationId);
+      setActiveConversationId((prevActiveId) => {
+        if (prevActiveId !== conversationId) return prevActiveId;
+        return nextConversations[0]?.id || null;
+      });
+      return nextConversations;
+    });
   }
 
   async function sendMessage(question) {
-    if (!activeConversationId) await newConversation();
-    const conversationId = activeConversationId || conversations[0]?.id;
+    let conversationId = activeConversationId || conversations[0]?.id;
+    if (!conversationId) {
+      const created = await newConversation();
+      conversationId = created?.id || null;
+    }
+
     if (!conversationId) return;
 
     const userMessage = {
@@ -61,7 +82,8 @@ export function useChat() {
           : conversation,
       ),
     );
-    await conversationService.appendMessage(conversationId, userMessage);
+    const userAppendResult = await conversationService.appendMessage(conversationId, userMessage);
+    applyConversationTitle(conversationId, userAppendResult?.conversationTitle);
 
     const assistantMessageId = crypto.randomUUID();
     const assistantShell = {
@@ -104,7 +126,8 @@ export function useChat() {
         content: answer,
         streaming: false,
       };
-      await conversationService.appendMessage(conversationId, finalMessage);
+      const assistantAppendResult = await conversationService.appendMessage(conversationId, finalMessage);
+      applyConversationTitle(conversationId, assistantAppendResult?.conversationTitle);
     } finally {
       setIsLoading(false);
     }
@@ -115,6 +138,8 @@ export function useChat() {
     activeConversation,
     activeConversationId,
     setActiveConversationId,
+    draft,
+    setDraft,
     newConversation,
     renameConversation,
     deleteConversation,

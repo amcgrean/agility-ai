@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
 const STORAGE_KEY = 'agility-ai-conversations';
 
 const now = () => new Date().toISOString();
@@ -110,5 +110,16 @@ export const conversationService = {
     });
 
     return response.answer;
+  },
+
+  async trackEngagement(payload) {
+    try {
+      return await request('/engagement', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      return { ok: false };
+    }
   },
 };
