@@ -24,12 +24,27 @@ export default function ChatPage() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') !== 'light');
+  const [currentUser, setCurrentUser] = useState(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
     localStorage.setItem('theme', darkMode ? 'dark' : 'light');
   }, [darkMode]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadCurrentUser() {
+      const user = await conversationService.currentUser();
+      if (active) setCurrentUser(user);
+    }
+
+    loadCurrentUser();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
 
@@ -135,6 +150,7 @@ export default function ChatPage() {
           onToggleTheme={() => setDarkMode((prev) => !prev)}
           onExportPdf={exportPdf}
           onShare={shareConversation}
+          currentUser={currentUser}
         />
 
         <div className="flex-1 space-y-4 overflow-y-auto p-6">

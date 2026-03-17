@@ -612,6 +612,15 @@ def list_conversations(request: Request):
     return list_conversations_with_messages(user_identity)
 
 
+@app.get("/users/me")
+def get_current_user(request: Request):
+    user_identity = resolve_user_identity(request)
+    return {
+        "identity": user_identity,
+        "trainingConsent": get_user_training_consent(user_identity),
+    }
+
+
 @app.get("/users/me/training-consent")
 def get_training_consent(request: Request):
     user_identity = resolve_user_identity(request)

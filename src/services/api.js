@@ -112,6 +112,17 @@ export const conversationService = {
     return response.answer;
   },
 
+  async currentUser() {
+    try {
+      return await request('/users/me');
+    } catch {
+      return {
+        identity: 'local',
+        trainingConsent: false,
+      };
+    }
+  },
+
   async trackEngagement(payload) {
     try {
       return await request('/engagement', {
