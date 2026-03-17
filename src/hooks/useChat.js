@@ -104,7 +104,7 @@ export function useChat() {
 
     setIsLoading(true);
     try {
-      const answer = await conversationService.ask(question);
+      const answer = await conversationService.ask(question, conversationId);
       for (let i = 0; i <= answer.length; i += 4) {
         const partial = answer.slice(0, i);
         setConversations((prev) =>

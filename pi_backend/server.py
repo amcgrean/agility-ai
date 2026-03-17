@@ -1,9 +1,11 @@
 import json
+import logging
 import os
 import re
 import sqlite3
 import uuid
 from base64 import urlsafe_b64decode
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -13,10 +15,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from openai import OpenAI
 from pydantic import BaseModel
 
-from providers import OpenAIProvider
+from providers import OpenAIProvider, ProviderAnswer
 
 load_dotenv()
 
@@ -25,12 +26,23 @@ INDEX_FILE = BASE / "agility.index"
 META_FILE = BASE / "agility_meta.jsonl"
 UI_DIR = BASE / "ui"
 DB_FILE = BASE / "agility_ai.db"
+CACHE_DB_FILE = Path(os.getenv("CACHE_DB_FILE", str(BASE / "agility_cache.db")))
 LEGACY_CONVERSATIONS_FILE = BASE / "conversations.json"
 
-TOP_K = int(os.getenv("TOP_K", "6"))
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
+RETRIEVAL_TOP_K_CANDIDATES = int(os.getenv("RETRIEVAL_TOP_K_CANDIDATES", os.getenv("TOP_K", "10")))
+FINAL_TOP_K = int(os.getenv("FINAL_TOP_K", "4"))
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "9000"))
+MIN_RERANK_SCORE = float(os.getenv("MIN_RERANK_SCORE", "0.1"))
+MAX_RECENT_MESSAGES = int(os.getenv("MAX_RECENT_MESSAGES", "6"))
+CONVERSATION_SUMMARY_TRIGGER_MESSAGES = int(os.getenv("CONVERSATION_SUMMARY_TRIGGER_MESSAGES", "12"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "700"))
+REQUEST_CACHE_TTL_SECONDS = int(os.getenv("REQUEST_CACHE_TTL_SECONDS", "300"))
+ENABLE_DEBUG_MODE = os.getenv("ENABLE_DEBUG_MODE", "false").lower() == "true"
+ENABLE_HYBRID_RETRIEVAL_HINT = os.getenv("ENABLE_HYBRID_RETRIEVAL_HINT", "true").lower() == "true"
 
-client = OpenAI()
+logger = logging.getLogger("agility_ai")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
 provider = OpenAIProvider()
 
 index = faiss.read_index(str(INDEX_FILE))
@@ -48,6 +60,7 @@ if (UI_DIR / "assets").exists():
 
 class AskRequest(BaseModel):
     question: str
+    conversationId: str | None = None
 
 
 class ConversationCreateRequest(BaseModel):
@@ -79,12 +92,20 @@ class TrainingConsentUpdateRequest(BaseModel):
 
 
 def now_iso() -> str:
-    return __import__("datetime").datetime.utcnow().isoformat() + "Z"
+    return datetime.utcnow().isoformat() + "Z"
 
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_cache_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(CACHE_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -135,7 +156,177 @@ def init_db() -> None:
         )
         ensure_column(conn, "conversations", "owner_identity", "TEXT NOT NULL DEFAULT 'local'")
         ensure_column(conn, "conversations", "training_consent", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "conversations", "memory_summary", "TEXT")
         ensure_column(conn, "engagement_events", "user_identity", "TEXT NOT NULL DEFAULT 'local'")
+
+
+def init_cache_db() -> None:
+    with get_cache_db() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ask_cache (
+                key TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ask_cache_expires_at
+            ON ask_cache(expires_at);
+            """
+        )
+
+
+def estimate_cost(usage: dict) -> float:
+    # conservative estimate for gpt-5-mini; overridable by env
+    input_cost_per_million = float(os.getenv("INPUT_COST_PER_MILLION", "0.25"))
+    output_cost_per_million = float(os.getenv("OUTPUT_COST_PER_MILLION", "2.0"))
+    input_tokens = usage.get("input_tokens", 0) or 0
+    output_tokens = usage.get("output_tokens", 0) or 0
+    return (input_tokens / 1_000_000) * input_cost_per_million + (output_tokens / 1_000_000) * output_cost_per_million
+
+
+def jaccard_similarity(a: str, b: str) -> float:
+    tokens_a = set(re.findall(r"\w+", a.lower()))
+    tokens_b = set(re.findall(r"\w+", b.lower()))
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def select_contexts(question: str, indices: np.ndarray, distances: np.ndarray) -> list[dict]:
+    selected: list[dict] = []
+
+    for raw_idx, distance in zip(indices[0], distances[0]):
+        idx = int(raw_idx)
+        if idx < 0 or idx >= len(meta):
+            continue
+        ctx = dict(meta[idx])
+        text = (ctx.get("text") or "").strip()
+        if not text:
+            continue
+
+        keyword_overlap = jaccard_similarity(question, text)
+        rerank_score = float(distance) + (0.20 * keyword_overlap if ENABLE_HYBRID_RETRIEVAL_HINT else 0.0)
+        if rerank_score < MIN_RERANK_SCORE:
+            continue
+
+        duplicate = any(
+            jaccard_similarity(text, existing.get("text", "")) > 0.88
+            or (
+                ctx.get("url")
+                and existing.get("url")
+                and ctx.get("url") == existing.get("url")
+                and abs(int(ctx.get("chunk_id", 0)) - int(existing.get("chunk_id", 0))) <= 1
+            )
+            for existing in selected
+        )
+        if duplicate:
+            continue
+
+        ctx["retrieval_score"] = rerank_score
+        ctx.setdefault("source_type", "website_docs")
+        selected.append(ctx)
+
+    selected.sort(key=lambda item: item.get("retrieval_score", 0.0), reverse=True)
+
+    constrained: list[dict] = []
+    total_chars = 0
+    for ctx in selected[: FINAL_TOP_K * 2]:
+        chunk_chars = len(ctx.get("text", ""))
+        if constrained and total_chars + chunk_chars > MAX_CONTEXT_CHARS:
+            break
+        constrained.append(ctx)
+        total_chars += chunk_chars
+        if len(constrained) >= FINAL_TOP_K:
+            break
+
+    return constrained
+
+
+def get_conversation_context(conversation_id: str, user_identity: str) -> tuple[list[dict], str | None]:
+    with get_db() as conn:
+        messages = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM messages
+            WHERE conversation_id = ?
+            ORDER BY created_at ASC
+            """,
+            (conversation_id,),
+        ).fetchall()
+        row = conn.execute(
+            "SELECT memory_summary FROM conversations WHERE id = ? AND owner_identity = ?",
+            (conversation_id, user_identity),
+        ).fetchone()
+
+    recent_messages = [
+        {"role": row["role"], "content": row["content"], "createdAt": row["created_at"]}
+        for row in messages[-MAX_RECENT_MESSAGES:]
+    ]
+    memory_summary = row["memory_summary"] if row else None
+
+    if len(messages) >= CONVERSATION_SUMMARY_TRIGGER_MESSAGES:
+        try:
+            recomputed_summary = provider.summarize_messages(
+                [{"role": row["role"], "content": row["content"]} for row in messages],
+                previous_summary=memory_summary,
+            )
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE conversations SET memory_summary = ? WHERE id = ? AND owner_identity = ?",
+                    (recomputed_summary, conversation_id, user_identity),
+                )
+            memory_summary = recomputed_summary
+        except Exception as exc:
+            logger.warning("Failed to summarize conversation %s: %s", conversation_id, exc)
+
+    return recent_messages, memory_summary
+
+
+def cleanup_expired_cache() -> None:
+    now_ts = datetime.utcnow().timestamp()
+    with get_cache_db() as conn:
+        conn.execute("DELETE FROM ask_cache WHERE expires_at <= ?", (now_ts,))
+
+
+def get_cached_answer(cache_key: str) -> dict | None:
+    now_ts = datetime.utcnow().timestamp()
+    with get_cache_db() as conn:
+        row = conn.execute(
+            "SELECT payload_json, expires_at FROM ask_cache WHERE key = ?",
+            (cache_key,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    if row["expires_at"] <= now_ts:
+        with get_cache_db() as conn:
+            conn.execute("DELETE FROM ask_cache WHERE key = ?", (cache_key,))
+        return None
+
+    try:
+        return json.loads(row["payload_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def put_cached_answer(cache_key: str, payload: dict) -> None:
+    now_ts = datetime.utcnow().timestamp()
+    expires_at = now_ts + REQUEST_CACHE_TTL_SECONDS
+    with get_cache_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO ask_cache (key, payload_json, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at
+            """,
+            (cache_key, json.dumps(payload), now_ts, expires_at),
+        )
 
 
 def decode_access_jwt_email(jwt_token: str) -> str | None:
@@ -375,6 +566,8 @@ def stable_identity_hash(identity: str) -> str:
 
 
 init_db()
+init_cache_db()
+cleanup_expired_cache()
 migrate_legacy_conversations()
 
 
@@ -587,22 +780,76 @@ def home():
 
 
 @app.post("/ask")
-def ask(req: AskRequest):
-    emb = client.embeddings.create(model=EMBED_MODEL, input=req.question).data[0].embedding
+def ask(req: AskRequest, request: Request):
+    user_identity = resolve_user_identity(request)
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
 
+    cache_scope = req.conversationId or "global"
+    cache_key = sha256(f"{user_identity}:{cache_scope}:{question.lower()}".encode("utf-8")).hexdigest()
+    cached = get_cached_answer(cache_key)
+    if cached:
+        return cached
+
+    emb = provider.embedding(question)
     q = np.array([emb]).astype("float32")
     faiss.normalize_L2(q)
 
-    _distances, indices = index.search(q, TOP_K)
+    distances, indices = index.search(q, RETRIEVAL_TOP_K_CANDIDATES)
+    contexts = select_contexts(question, indices, distances)
 
-    contexts = []
-    for idx in indices[0]:
-        if idx >= 0:
-            contexts.append(meta[idx])
+    recent_messages: list[dict] = []
+    memory_summary: str | None = None
+    if req.conversationId:
+        require_conversation_access(req.conversationId, user_identity)
+        recent_messages, memory_summary = get_conversation_context(req.conversationId, user_identity)
 
-    answer = provider.answer(req.question, contexts)
+    answer_result: ProviderAnswer = provider.answer(
+        question,
+        contexts,
+        recent_messages=recent_messages,
+        memory_summary=memory_summary,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+    )
 
-    return {"answer": answer}
+    usage = answer_result.usage if isinstance(answer_result.usage, dict) else {}
+    estimated_cost = estimate_cost(usage)
+    logger.info(
+        "ask conversation=%s contexts=%d in_tokens=%s out_tokens=%s est_cost=%.6f",
+        req.conversationId,
+        len(contexts),
+        usage.get("input_tokens", "?"),
+        usage.get("output_tokens", "?"),
+        estimated_cost,
+    )
+
+    payload = {
+        "answer": answer_result.text,
+        "usage": usage,
+        "estimatedCostUsd": estimated_cost,
+    }
+
+    if ENABLE_DEBUG_MODE:
+        payload["debug"] = {
+            "retrievalTopKCandidates": RETRIEVAL_TOP_K_CANDIDATES,
+            "finalTopK": FINAL_TOP_K,
+            "selectedContexts": [
+                {
+                    "url": ctx.get("url"),
+                    "chunk_id": ctx.get("chunk_id"),
+                    "source_type": ctx.get("source_type", "website_docs"),
+                    "retrieval_score": ctx.get("retrieval_score"),
+                    "preview": (ctx.get("text", "")[:220] + "...") if len(ctx.get("text", "")) > 220 else ctx.get("text", ""),
+                }
+                for ctx in contexts
+            ],
+            "recentMessagesIncluded": len(recent_messages),
+            "hasMemorySummary": bool(memory_summary),
+        }
+
+    put_cached_answer(cache_key, payload)
+    return payload
 
 
 @app.get("/{full_path:path}")
