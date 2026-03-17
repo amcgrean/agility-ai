@@ -22,6 +22,8 @@ Endpoints used:
 - `POST /ask`
 - `GET/POST/PATCH/DELETE /conversations` (stub fallback to local storage)
 - `POST /messages` (stub fallback to local storage)
+- `GET/PATCH /users/me/training-consent` (opt-in/out training eligibility)
+- `GET /admin/training-export` (token-protected export of redacted, consented training records)
 
 Set `VITE_API_URL` to override the backend URL.
 
