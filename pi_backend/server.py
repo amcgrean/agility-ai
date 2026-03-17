@@ -158,12 +158,35 @@ def init_db() -> None:
                 training_consent INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ask_analytics (
+                id TEXT PRIMARY KEY,
+                user_identity TEXT NOT NULL DEFAULT 'local',
+                conversation_id TEXT,
+                question TEXT NOT NULL,
+                normalized_question TEXT NOT NULL,
+                cache_hit INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ask_analytics_created
+            ON ask_analytics(created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_ask_analytics_user_created
+            ON ask_analytics(user_identity, created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_ask_analytics_question
+            ON ask_analytics(normalized_question);
             """
         )
         ensure_column(conn, "conversations", "owner_identity", "TEXT NOT NULL DEFAULT 'local'")
         ensure_column(conn, "conversations", "training_consent", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "conversations", "memory_summary", "TEXT")
         ensure_column(conn, "engagement_events", "user_identity", "TEXT NOT NULL DEFAULT 'local'")
+        ensure_column(conn, "ask_analytics", "conversation_id", "TEXT")
 
 
 def init_cache_db() -> None:
@@ -190,6 +213,11 @@ def estimate_cost(usage: dict) -> float:
     input_tokens = usage.get("input_tokens", 0) or 0
     output_tokens = usage.get("output_tokens", 0) or 0
     return (input_tokens / 1_000_000) * input_cost_per_million + (output_tokens / 1_000_000) * output_cost_per_million
+
+
+def normalize_question(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", question.strip().lower())
+    return normalized[:500]
 
 
 def jaccard_similarity(a: str, b: str) -> float:
@@ -566,6 +594,10 @@ def check_export_token(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid export token")
 
 
+def check_admin_token(request: Request) -> None:
+    check_export_token(request)
+
+
 def stable_identity_hash(identity: str) -> str:
     salt = os.getenv("TRAINING_EXPORT_SALT", "agility-training")
     return sha256(f"{salt}:{identity}".encode("utf-8")).hexdigest()
@@ -593,6 +625,63 @@ def get_user_training_consent(user_identity: str) -> bool:
             (user_identity,),
         ).fetchone()
         return bool(conversation_row["enabled"]) if conversation_row and conversation_row["enabled"] is not None else False
+
+
+def record_ask_analytics(
+    *,
+    user_identity: str,
+    conversation_id: str | None,
+    question: str,
+    usage: dict,
+    estimated_cost: float,
+    cache_hit: bool,
+) -> None:
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO ask_analytics (
+                id,
+                user_identity,
+                conversation_id,
+                question,
+                normalized_question,
+                cache_hit,
+                input_tokens,
+                output_tokens,
+                estimated_cost_usd,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                user_identity,
+                conversation_id,
+                question,
+                normalize_question(question),
+                1 if cache_hit else 0,
+                input_tokens,
+                output_tokens,
+                estimated_cost,
+                now_iso(),
+            ),
+        )
+
+
+def summarize_feedback() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT event_type, COUNT(*) AS count
+            FROM engagement_events
+            GROUP BY event_type
+            ORDER BY count DESC, event_type ASC
+            """
+        ).fetchall()
+
+    return [{"eventType": row["event_type"], "count": row["count"]} for row in rows]
 
 
 init_db()
@@ -776,6 +865,148 @@ def export_training_dataset(request: Request):
     return {"count": len(records), "records": records}
 
 
+@app.get("/admin/metrics")
+def get_admin_metrics(request: Request):
+    check_admin_token(request)
+
+    with get_db() as conn:
+        overview_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_questions,
+                COALESCE(SUM(estimated_cost_usd), 0) AS total_spend,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of day') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_today,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of month') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_month,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of year') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_year,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') THEN 1 ELSE 0 END), 0) AS questions_30d,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of day') THEN 1 ELSE 0 END), 0) AS questions_today,
+                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') AND cache_hit = 1 THEN 1 ELSE 0 END), 0) AS cache_hits_30d,
+                COUNT(DISTINCT CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') THEN user_identity END) AS active_users_30d,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens_total,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens_total
+            FROM ask_analytics
+            """
+        ).fetchone()
+
+        top_question_rows = conn.execute(
+            """
+            SELECT
+                normalized_question,
+                MIN(question) AS example_question,
+                COUNT(*) AS ask_count,
+                COUNT(DISTINCT user_identity) AS user_count,
+                MAX(created_at) AS last_asked_at
+            FROM ask_analytics
+            WHERE normalized_question != ''
+            GROUP BY normalized_question
+            ORDER BY ask_count DESC, last_asked_at DESC
+            LIMIT 12
+            """
+        ).fetchall()
+
+        top_user_rows = conn.execute(
+            """
+            SELECT
+                user_identity,
+                COUNT(*) AS question_count,
+                COALESCE(SUM(estimated_cost_usd), 0) AS total_cost_usd,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                MAX(created_at) AS last_asked_at
+            FROM ask_analytics
+            GROUP BY user_identity
+            ORDER BY total_cost_usd DESC, question_count DESC, user_identity ASC
+            LIMIT 20
+            """
+        ).fetchall()
+
+        usage_day_rows = conn.execute(
+            """
+            SELECT
+                substr(created_at, 1, 10) AS day,
+                COUNT(*) AS question_count,
+                COALESCE(SUM(estimated_cost_usd), 0) AS total_cost_usd,
+                COALESCE(SUM(cache_hit), 0) AS cache_hits
+            FROM ask_analytics
+            WHERE datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day')
+            GROUP BY substr(created_at, 1, 10)
+            ORDER BY day ASC
+            """
+        ).fetchall()
+
+        recent_feedback_rows = conn.execute(
+            """
+            SELECT
+                event_type,
+                user_identity,
+                label,
+                created_at
+            FROM engagement_events
+            ORDER BY created_at DESC
+            LIMIT 20
+            """
+        ).fetchall()
+
+    questions_30d = int(overview_row["questions_30d"] or 0)
+    cache_hits_30d = int(overview_row["cache_hits_30d"] or 0)
+
+    return {
+        "generatedAt": now_iso(),
+        "overview": {
+            "totalQuestions": int(overview_row["total_questions"] or 0),
+            "questionsToday": int(overview_row["questions_today"] or 0),
+            "questions30d": questions_30d,
+            "activeUsers30d": int(overview_row["active_users_30d"] or 0),
+            "cacheHitRate30d": (cache_hits_30d / questions_30d) if questions_30d else 0.0,
+            "inputTokensTotal": int(overview_row["input_tokens_total"] or 0),
+            "outputTokensTotal": int(overview_row["output_tokens_total"] or 0),
+            "spendToday": float(overview_row["spend_today"] or 0.0),
+            "spendMonth": float(overview_row["spend_month"] or 0.0),
+            "spendYear": float(overview_row["spend_year"] or 0.0),
+            "totalSpend": float(overview_row["total_spend"] or 0.0),
+        },
+        "topQuestions": [
+            {
+                "question": row["example_question"],
+                "count": int(row["ask_count"] or 0),
+                "users": int(row["user_count"] or 0),
+                "lastAskedAt": row["last_asked_at"],
+            }
+            for row in top_question_rows
+        ],
+        "topUsers": [
+            {
+                "userIdentity": row["user_identity"],
+                "questionCount": int(row["question_count"] or 0),
+                "totalCostUsd": float(row["total_cost_usd"] or 0.0),
+                "inputTokens": int(row["input_tokens"] or 0),
+                "outputTokens": int(row["output_tokens"] or 0),
+                "lastAskedAt": row["last_asked_at"],
+            }
+            for row in top_user_rows
+        ],
+        "usageByDay": [
+            {
+                "day": row["day"],
+                "questionCount": int(row["question_count"] or 0),
+                "totalCostUsd": float(row["total_cost_usd"] or 0.0),
+                "cacheHits": int(row["cache_hits"] or 0),
+            }
+            for row in usage_day_rows
+        ],
+        "feedbackSummary": summarize_feedback(),
+        "recentFeedback": [
+            {
+                "eventType": row["event_type"],
+                "userIdentity": row["user_identity"],
+                "label": row["label"],
+                "createdAt": row["created_at"],
+            }
+            for row in recent_feedback_rows
+        ],
+    }
+
+
 @app.post("/engagement")
 def create_engagement_event(req: EngagementEventCreateRequest, request: Request):
     event_id = str(uuid.uuid4())
@@ -821,6 +1052,14 @@ def ask(req: AskRequest, request: Request):
     cache_key = sha256(f"{user_identity}:{cache_scope}:{question.lower()}".encode("utf-8")).hexdigest()
     cached = get_cached_answer(cache_key)
     if cached:
+        record_ask_analytics(
+            user_identity=user_identity,
+            conversation_id=req.conversationId,
+            question=question,
+            usage=cached.get("usage", {}) if isinstance(cached, dict) else {},
+            estimated_cost=float(cached.get("estimatedCostUsd", 0.0)) if isinstance(cached, dict) else 0.0,
+            cache_hit=True,
+        )
         return cached
 
     emb = provider.embedding(question)
@@ -879,6 +1118,14 @@ def ask(req: AskRequest, request: Request):
             "hasMemorySummary": bool(memory_summary),
         }
 
+    record_ask_analytics(
+        user_identity=user_identity,
+        conversation_id=req.conversationId,
+        question=question,
+        usage=usage,
+        estimated_cost=estimated_cost,
+        cache_hit=False,
+    )
     put_cached_answer(cache_key, payload)
     return payload
 

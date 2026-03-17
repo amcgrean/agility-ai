@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { jsPDF } from 'jspdf';
+import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import TopBar from '../components/TopBar';
 import ChatMessage from '../components/ChatMessage';
@@ -26,6 +27,7 @@ export default function ChatPage() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') !== 'light');
   const [currentUser, setCurrentUser] = useState(null);
   const inputRef = useRef(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -150,6 +152,7 @@ export default function ChatPage() {
           onToggleTheme={() => setDarkMode((prev) => !prev)}
           onExportPdf={exportPdf}
           onShare={shareConversation}
+          onOpenAdmin={() => navigate('/admin')}
           currentUser={currentUser}
         />
 

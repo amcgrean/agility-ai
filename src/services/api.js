@@ -133,4 +133,12 @@ export const conversationService = {
       return { ok: false };
     }
   },
+
+  async getAdminMetrics(token) {
+    return request('/admin/metrics', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  },
 };
