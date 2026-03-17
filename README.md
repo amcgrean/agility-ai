@@ -19,7 +19,7 @@ React + Vite + Tailwind frontend for an Agility private assistant backed by Fast
 Default backend URL: `http://localhost:8000`
 
 Endpoints used:
-- `POST /ask`
+- `POST /ask` (now supports optional `conversationId` for optimized memory-aware context)
 - `GET/POST/PATCH/DELETE /conversations` (stub fallback to local storage)
 - `POST /messages` (stub fallback to local storage)
 - `GET/PATCH /users/me/training-consent` (opt-in/out training eligibility)
@@ -57,3 +57,18 @@ The app is organized by `components`, `hooks`, `pages`, and `services` to make f
 - voice input
 - multi-model switching
 - admin dashboard
+
+
+## Pi deployment update steps
+
+1. Pull latest code on the Pi.
+2. Update backend env with new retrieval/cost settings from `pi_backend/README.md`.
+3. Restart FastAPI service (or process manager) so startup schema patch runs and cache DB is initialized (`agility_cache.db` by default).
+4. Rebuild/copy frontend if deploying UI updates:
+   - `npm run build`
+   - copy `dist/` into `/home/amcgrean/agility-ai/ui`
+
+No FAISS index schema change is required.
+
+
+Tip: back up both `agility_ai.db` (chat history) and `agility_cache.db` (response cache) before major updates.
