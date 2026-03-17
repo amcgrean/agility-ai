@@ -34,6 +34,7 @@ Set `ADMIN_EXPORT_TOKEN` in the backend environment to enable export access.
 - Debug mode (`ENABLE_DEBUG_MODE=true`) exposes selected chunks and retrieval scores in `/ask` response.
 
 ### New environment variables
+- `OPENAI_API_KEY` (required)
 - `CHAT_MODEL` (default: `gpt-5-mini`)
 - `EMBED_MODEL` (default: `text-embedding-3-small`)
 - `RETRIEVAL_TOP_K_CANDIDATES` (default: `10`)
@@ -49,9 +50,13 @@ Set `ADMIN_EXPORT_TOKEN` in the backend environment to enable export access.
 - `ENABLE_HYBRID_RETRIEVAL_HINT` (`true`/`false`, default: `true`)
 - `INPUT_COST_PER_MILLION` (default: `0.25`)
 - `OUTPUT_COST_PER_MILLION` (default: `2.0`)
+- `ADMIN_EXPORT_TOKEN` (required only if using `/admin/training-export`)
+- `TRAINING_EXPORT_SALT` (recommended if using exports)
 
 ### Migration notes
 No destructive migration is required. On startup, the backend safely adds a nullable `memory_summary` column to `conversations` if missing. A separate cache SQLite DB is created automatically for request caching.
+
+Do not replace the Pi `.env` wholesale from the template. Merge new keys into the existing file so current secrets like `OPENAI_API_KEY` are preserved.
 
 ### Recommended defaults for Raspberry Pi 5
 - Candidate retrieval: `RETRIEVAL_TOP_K_CANDIDATES=10`

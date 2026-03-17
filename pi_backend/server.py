@@ -152,6 +152,12 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_engagement_created
             ON engagement_events(created_at);
+
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_identity TEXT PRIMARY KEY,
+                training_consent INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(conn, "conversations", "owner_identity", "TEXT NOT NULL DEFAULT 'local'")
@@ -565,6 +571,30 @@ def stable_identity_hash(identity: str) -> str:
     return sha256(f"{salt}:{identity}".encode("utf-8")).hexdigest()
 
 
+def get_user_training_consent(user_identity: str) -> bool:
+    with get_db() as conn:
+        preference_row = conn.execute(
+            """
+            SELECT training_consent
+            FROM user_preferences
+            WHERE user_identity = ?
+            """,
+            (user_identity,),
+        ).fetchone()
+        if preference_row is not None:
+            return bool(preference_row["training_consent"])
+
+        conversation_row = conn.execute(
+            """
+            SELECT MAX(training_consent) AS enabled
+            FROM conversations
+            WHERE owner_identity = ?
+            """,
+            (user_identity,),
+        ).fetchone()
+        return bool(conversation_row["enabled"]) if conversation_row and conversation_row["enabled"] is not None else False
+
+
 init_db()
 init_cache_db()
 cleanup_expired_cache()
@@ -585,23 +615,23 @@ def list_conversations(request: Request):
 @app.get("/users/me/training-consent")
 def get_training_consent(request: Request):
     user_identity = resolve_user_identity(request)
-    with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT MAX(training_consent) AS enabled
-            FROM conversations
-            WHERE owner_identity = ?
-            """,
-            (user_identity,),
-        ).fetchone()
-
-    return {"enabled": bool(row["enabled"]) if row and row["enabled"] is not None else False}
+    return {"enabled": get_user_training_consent(user_identity)}
 
 
 @app.patch("/users/me/training-consent")
 def set_training_consent(req: TrainingConsentUpdateRequest, request: Request):
     user_identity = resolve_user_identity(request)
     with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_identity, training_consent, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_identity) DO UPDATE SET
+                training_consent = excluded.training_consent,
+                updated_at = excluded.updated_at
+            """,
+            (user_identity, 1 if req.enabled else 0, now_iso()),
+        )
         conn.execute(
             """
             UPDATE conversations
@@ -621,15 +651,7 @@ def create_conversation(req: ConversationCreateRequest, request: Request):
     user_identity = resolve_user_identity(request)
 
     with get_db() as conn:
-        consent_row = conn.execute(
-            """
-            SELECT MAX(training_consent) AS enabled
-            FROM conversations
-            WHERE owner_identity = ?
-            """,
-            (user_identity,),
-        ).fetchone()
-        default_consent = bool(consent_row["enabled"]) if consent_row and consent_row["enabled"] is not None else False
+        default_consent = get_user_training_consent(user_identity)
         conn.execute(
             """
             INSERT INTO conversations (id, title, owner_identity, training_consent, created_at, updated_at)
