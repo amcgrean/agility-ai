@@ -16,4 +16,4 @@ npm run build
 
 ssh $HostAlias "mkdir -p /home/amcgrean/agility-ai/dist && rm -rf /home/amcgrean/agility-ai/dist/*"
 scp -r dist\* "${HostAlias}:/home/amcgrean/agility-ai/dist/"
-ssh $HostAlias "/home/amcgrean/agility-ai-local/bin/deploy-agility-ai.sh"
+ssh $HostAlias "sed -i 's/\r$//' /home/amcgrean/agility-ai-local/bin/deploy-agility-ai.sh && /home/amcgrean/agility-ai-local/bin/deploy-agility-ai.sh"
