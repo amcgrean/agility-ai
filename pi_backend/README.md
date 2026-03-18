@@ -48,6 +48,8 @@ Set `ADMIN_EXPORT_TOKEN` in the backend environment to enable export access.
 - `CACHE_DB_FILE` (default: `pi_backend/agility_cache.db`)
 - `ENABLE_DEBUG_MODE` (`true`/`false`, default: `false`)
 - `ENABLE_HYBRID_RETRIEVAL_HINT` (`true`/`false`, default: `true`)
+- `OPENAI_REASONING_EFFORT` (`minimal` recommended for retrieval-heavy GPT-5 answers on Pi)
+- `OPENAI_TEXT_VERBOSITY` (`low`/`medium`/`high`, default: `medium`)
 - `INPUT_COST_PER_MILLION` (default: `0.25`)
 - `OUTPUT_COST_PER_MILLION` (default: `2.0`)
 - `ADMIN_EXPORT_TOKEN` (required only if using `/admin/training-export`)
@@ -59,6 +61,30 @@ Set `ADMIN_EXPORT_TOKEN` in the backend environment to enable export access.
 No destructive migration is required. On startup, the backend safely adds a nullable `memory_summary` column to `conversations` if missing. A separate cache SQLite DB is created automatically for request caching.
 
 Do not replace the Pi `.env` wholesale from the template. Merge new keys into the existing file so current secrets like `OPENAI_API_KEY` are preserved.
+
+## Git-backed Pi deployment
+
+For a durable production setup, keep the Raspberry Pi app as a normal Git checkout and move machine-local state outside the repo:
+
+- code checkout: `/home/amcgrean/agility-ai`
+- env file: `/etc/agility-ai/agility.env`
+- persistent app data: `/home/amcgrean/agility-ai-data`
+- Pi-only helper scripts: `/home/amcgrean/agility-ai-local`
+
+`server.py` supports these path overrides:
+
+- `AGILITY_ENV_FILE` for the env file to load
+- `AGILITY_DATA_DIR` for `agility_ai.db`, `agility_cache.db`, `agility.index`, and `agility_meta.jsonl`
+- `AGILITY_UI_DIR` for the built frontend directory
+
+Suggested systemd wiring:
+
+- `WorkingDirectory=/home/amcgrean/agility-ai/pi_backend`
+- `EnvironmentFile=/etc/agility-ai/agility.env`
+- `Environment=AGILITY_DATA_DIR=/home/amcgrean/agility-ai-data`
+- `Environment=AGILITY_UI_DIR=/home/amcgrean/agility-ai/dist`
+
+That layout lets the Pi track `origin/main` cleanly while preserving secrets, indexes, and local utility scripts across deploys.
 
 ### Recommended defaults for Raspberry Pi 5
 - Candidate retrieval: `RETRIEVAL_TOP_K_CANDIDATES=10`

@@ -61,12 +61,14 @@ The app is organized by `components`, `hooks`, `pages`, and `services` to make f
 
 ## Pi deployment update steps
 
-1. Pull latest code on the Pi.
-2. Update backend env with new retrieval/cost settings from `pi_backend/README.md`.
-3. Restart FastAPI service (or process manager) so startup schema patch runs and cache DB is initialized (`agility_cache.db` by default).
-4. Rebuild/copy frontend if deploying UI updates:
-   - `npm run build`
-   - copy `dist/` into `/home/amcgrean/agility-ai/ui`
+1. Keep the Pi app as a Git checkout of `main`.
+2. Store Pi-local state outside the repo:
+   - env: `/etc/agility-ai/agility.env`
+   - data: `/home/amcgrean/agility-ai-data`
+   - local scripts: `/home/amcgrean/agility-ai-local`
+3. Build the frontend with `npm run build`.
+4. Restart the FastAPI service after pulling changes so startup migrations run and the latest UI is served.
+5. For the current laptop-driven flow, use `scripts/deploy-pi.ps1` after changes are committed and pushed.
 
 No FAISS index schema change is required.
 

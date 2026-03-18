@@ -43,6 +43,8 @@ class OpenAIProvider(LLMProvider):
         self.client = OpenAI()
         self.model = os.getenv("CHAT_MODEL", "gpt-5-mini")
         self.embed_model = os.getenv("EMBED_MODEL", "text-embedding-3-small")
+        self.reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "minimal")
+        self.verbosity = os.getenv("OPENAI_TEXT_VERBOSITY", "medium")
 
     def embedding(self, text: str) -> list[float]:
         return self.client.embeddings.create(model=self.embed_model, input=text).data[0].embedding
@@ -110,6 +112,9 @@ Documentation Sources:
             "model": self.model,
             "input": prompt,
         }
+        if self.model.startswith("gpt-5"):
+            payload["reasoning"] = {"effort": self.reasoning_effort}
+            payload["text"] = {"verbosity": self.verbosity}
         if max_output_tokens:
             payload["max_output_tokens"] = max_output_tokens
 

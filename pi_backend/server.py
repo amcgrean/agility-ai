@@ -19,15 +19,16 @@ from pydantic import BaseModel
 
 from providers import OpenAIProvider, ProviderAnswer
 
-load_dotenv()
+load_dotenv(os.getenv("AGILITY_ENV_FILE"))
 
 BASE = Path(__file__).resolve().parent
-INDEX_FILE = BASE / "agility.index"
-META_FILE = BASE / "agility_meta.jsonl"
-UI_DIR = BASE / "ui"
-DB_FILE = BASE / "agility_ai.db"
-CACHE_DB_FILE = Path(os.getenv("CACHE_DB_FILE", str(BASE / "agility_cache.db")))
-LEGACY_CONVERSATIONS_FILE = BASE / "conversations.json"
+DATA_DIR = Path(os.getenv("AGILITY_DATA_DIR", str(BASE))).expanduser()
+UI_DIR = Path(os.getenv("AGILITY_UI_DIR", str(BASE / "ui"))).expanduser()
+INDEX_FILE = DATA_DIR / "agility.index"
+META_FILE = DATA_DIR / "agility_meta.jsonl"
+DB_FILE = DATA_DIR / "agility_ai.db"
+CACHE_DB_FILE = Path(os.getenv("CACHE_DB_FILE", str(DATA_DIR / "agility_cache.db"))).expanduser()
+LEGACY_CONVERSATIONS_FILE = DATA_DIR / "conversations.json"
 
 RETRIEVAL_TOP_K_CANDIDATES = int(os.getenv("RETRIEVAL_TOP_K_CANDIDATES", os.getenv("TOP_K", "10")))
 FINAL_TOP_K = int(os.getenv("FINAL_TOP_K", "4"))
@@ -593,7 +594,7 @@ def ui_index_response():
 </head>
 <body style="font-family:Arial;max-width:900px;margin:40px auto;">
 <h2>Agility Documentation Assistant</h2>
-<p>UI bundle not found. Build the frontend into <code>/home/amcgrean/agility-ai/ui</code>.</p>
+<p>UI bundle not found. Build the frontend and point <code>AGILITY_UI_DIR</code> at the output directory.</p>
 </body>
 </html>
 """
