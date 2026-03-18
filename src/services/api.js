@@ -134,6 +134,18 @@ export const conversationService = {
     }
   },
 
+  async submitCorrection(conversationId, messageId, correctedAnswer, notes = '') {
+    return request('/feedback/corrections', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversationId,
+        messageId,
+        correctedAnswer,
+        notes,
+      }),
+    });
+  },
+
   async getAdminMetrics(token) {
     return request('/admin/metrics', {
       headers: {

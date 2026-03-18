@@ -73,6 +73,7 @@ export default function ChatMessage({
   onSuggestionClick,
   onMessageLike,
   onMessageDislike,
+  onMessageCorrection,
   onSuggestionLike,
   onSuggestionDislike,
 }) {
@@ -82,6 +83,11 @@ export default function ChatMessage({
   const [messageFeedback, setMessageFeedback] = useState(null);
   const [suggestionFeedback, setSuggestionFeedback] = useState({});
   const [copied, setCopied] = useState(false);
+  const [showCorrectionForm, setShowCorrectionForm] = useState(false);
+  const [correctedAnswer, setCorrectedAnswer] = useState('');
+  const [correctionNotes, setCorrectionNotes] = useState('');
+  const [correctionStatus, setCorrectionStatus] = useState('idle');
+  const [correctionError, setCorrectionError] = useState('');
 
   async function handleCopyResponse() {
     await navigator.clipboard.writeText(message.content || '');
@@ -99,6 +105,25 @@ export default function ChatMessage({
     if (messageFeedback) return;
     setMessageFeedback('disliked');
     await onMessageDislike?.(message);
+  }
+
+  async function submitCorrection() {
+    const trimmedAnswer = correctedAnswer.trim();
+    if (!trimmedAnswer || correctionStatus === 'saving') return;
+
+    try {
+      if (!messageFeedback) {
+        await handleMessageDislike();
+      }
+      setCorrectionStatus('saving');
+      setCorrectionError('');
+      await onMessageCorrection?.(message, trimmedAnswer, correctionNotes.trim());
+      setCorrectionStatus('saved');
+      setShowCorrectionForm(false);
+    } catch (error) {
+      setCorrectionStatus('idle');
+      setCorrectionError(error?.message || 'Unable to submit correction.');
+    }
   }
 
   async function handleSuggestionLike(suggestion) {
@@ -205,7 +230,7 @@ export default function ChatMessage({
 
       {!isUser && !showTyping ? (
         <div className="mt-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handleMessageLike}
@@ -226,12 +251,66 @@ export default function ChatMessage({
               <ThumbsDown className="h-4 w-4" />
               {messageFeedback === 'disliked' ? 'Disliked' : 'Thumbs down'}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCorrectionForm((prev) => !prev);
+                setCorrectionError('');
+              }}
+              disabled={messageFeedback === 'liked' || correctionStatus === 'saving'}
+              className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 px-3 py-1.5 text-xs text-amber-200 transition hover:border-amber-400 hover:text-amber-100 disabled:cursor-default disabled:border-slate-700 disabled:text-slate-500"
+              title={messageFeedback === 'liked' ? 'Corrections are disabled after positive feedback' : 'Submit a corrected answer'}
+            >
+              {correctionStatus === 'saved' ? 'Correction saved' : 'Submit correction'}
+            </button>
           </div>
           <p className="text-right text-xs opacity-70">{format(new Date(message.createdAt), 'p')}</p>
         </div>
       ) : (
         <p className="mt-2 text-right text-xs opacity-70">{format(new Date(message.createdAt), 'p')}</p>
       )}
+
+      {!isUser && !showTyping && showCorrectionForm ? (
+        <div className="mt-4 rounded-2xl border border-amber-500/30 bg-slate-900/70 p-4">
+          <p className="text-sm font-semibold text-amber-200">Improve this answer</p>
+          <p className="mt-1 text-xs text-slate-400">
+            We will save your corrected answer as explicit feedback for training review.
+          </p>
+          <textarea
+            className="mt-3 min-h-28 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+            placeholder="Write the better answer you want Agility AI to learn from."
+            value={correctedAnswer}
+            onChange={(event) => setCorrectedAnswer(event.target.value)}
+          />
+          <input
+            className="mt-3 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+            placeholder="Optional note about why the original answer missed"
+            value={correctionNotes}
+            onChange={(event) => setCorrectionNotes(event.target.value)}
+          />
+          {correctionError ? <p className="mt-3 text-xs text-rose-300">{correctionError}</p> : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={submitCorrection}
+              disabled={!correctedAnswer.trim() || correctionStatus === 'saving'}
+              className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-amber-400 disabled:cursor-default disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {correctionStatus === 'saving' ? 'Saving...' : 'Save correction'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCorrectionForm(false);
+                setCorrectionError('');
+              }}
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }

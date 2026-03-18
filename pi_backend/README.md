@@ -52,6 +52,8 @@ Set `ADMIN_EXPORT_TOKEN` in the backend environment to enable export access.
 - `OUTPUT_COST_PER_MILLION` (default: `2.0`)
 - `ADMIN_EXPORT_TOKEN` (required only if using `/admin/training-export`)
 - `TRAINING_EXPORT_SALT` (recommended if using exports)
+- `EXPERT_USER_IDENTITIES` (comma-separated identities whose corrective follow-ups should be treated as higher-confidence feedback)
+- `STAFF_USER_IDENTITIES` (comma-separated identities for medium-confidence trusted follow-up corrections)
 
 ### Migration notes
 No destructive migration is required. On startup, the backend safely adds a nullable `memory_summary` column to `conversations` if missing. A separate cache SQLite DB is created automatically for request caching.

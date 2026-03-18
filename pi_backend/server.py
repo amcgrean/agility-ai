@@ -40,6 +40,26 @@ REQUEST_CACHE_TTL_SECONDS = int(os.getenv("REQUEST_CACHE_TTL_SECONDS", "300"))
 ENABLE_DEBUG_MODE = os.getenv("ENABLE_DEBUG_MODE", "false").lower() == "true"
 ENABLE_HYBRID_RETRIEVAL_HINT = os.getenv("ENABLE_HYBRID_RETRIEVAL_HINT", "true").lower() == "true"
 
+
+def parse_identity_list(env_name: str) -> set[str]:
+    raw = os.getenv(env_name, "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+EXPERT_USER_IDENTITIES = parse_identity_list("EXPERT_USER_IDENTITIES")
+STAFF_USER_IDENTITIES = parse_identity_list("STAFF_USER_IDENTITIES")
+CORRECTION_CUE_PREFIXES = (
+    "correct answer",
+    "actually",
+    "no,",
+    "no ",
+    "it should be",
+    "it is",
+    "the answer is",
+    "real answer",
+    "what it should say",
+)
+
 logger = logging.getLogger("agility_ai")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
@@ -85,6 +105,13 @@ class EngagementEventCreateRequest(BaseModel):
     messageId: str | None = None
     label: str | None = None
     metadata: dict | None = None
+
+
+class CorrectionFeedbackCreateRequest(BaseModel):
+    conversationId: str
+    messageId: str
+    correctedAnswer: str
+    notes: str | None = None
 
 
 class TrainingConsentUpdateRequest(BaseModel):
@@ -583,6 +610,16 @@ def redact_pii(text: str) -> str:
     return redacted
 
 
+def safe_parse_metadata(metadata_json: str | None) -> dict:
+    if not metadata_json:
+        return {}
+    try:
+        parsed = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def check_export_token(request: Request) -> None:
     expected = os.getenv("ADMIN_EXPORT_TOKEN", "")
     if not expected:
@@ -601,6 +638,15 @@ def check_admin_token(request: Request) -> None:
 def stable_identity_hash(identity: str) -> str:
     salt = os.getenv("TRAINING_EXPORT_SALT", "agility-training")
     return sha256(f"{salt}:{identity}".encode("utf-8")).hexdigest()
+
+
+def get_user_trust_profile(identity: str) -> dict:
+    normalized = (identity or "").strip().lower()
+    if normalized in EXPERT_USER_IDENTITIES:
+        return {"tier": "expert", "weight": 3.0}
+    if normalized in STAFF_USER_IDENTITIES:
+        return {"tier": "staff", "weight": 2.0}
+    return {"tier": "default", "weight": 1.0}
 
 
 def get_user_training_consent(user_identity: str) -> bool:
@@ -682,6 +728,247 @@ def summarize_feedback() -> list[dict]:
         ).fetchall()
 
     return [{"eventType": row["event_type"], "count": row["count"]} for row in rows]
+
+
+def analytics_created_at_local_sql(column_name: str = "created_at") -> str:
+    return f"datetime(replace(replace({column_name}, 'T', ' '), 'Z', ''), 'localtime')"
+
+
+def looks_like_correction(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if len(normalized) < 24:
+        return False
+    if any(normalized.startswith(prefix) for prefix in CORRECTION_CUE_PREFIXES):
+        return True
+    return "wrong" in normalized or "should have" in normalized or "not " in normalized
+
+
+def collect_follow_up_correction_text(messages: list[sqlite3.Row], assistant_index: int) -> str | None:
+    correction_parts: list[str] = []
+    for message in messages[assistant_index + 1 :]:
+        if message["role"] == "assistant":
+            break
+        if message["role"] != "user":
+            continue
+        content = (message["content"] or "").strip()
+        if content:
+            correction_parts.append(content)
+    if not correction_parts:
+        return None
+    return "\n\n".join(correction_parts)
+
+
+def find_latest_user_question(messages: list[sqlite3.Row], assistant_index: int) -> str | None:
+    for message in reversed(messages[:assistant_index]):
+        if message["role"] != "user":
+            continue
+        content = (message["content"] or "").strip()
+        if content:
+            return content
+    return None
+
+
+def build_correction_record(
+    *,
+    event_id: str,
+    conversation_id: str,
+    user_identity: str,
+    conversation_created_at: str,
+    event_created_at: str,
+    assistant_message: sqlite3.Row,
+    question: str,
+    corrected_answer: str,
+    capture_mode: str,
+    source_event_type: str,
+    notes: str = "",
+) -> dict:
+    trust_profile = get_user_trust_profile(user_identity)
+    record = {
+        "event_id": event_id,
+        "conversation_id": conversation_id,
+        "user_hash": stable_identity_hash(user_identity),
+        "conversation_created_at": conversation_created_at,
+        "event_created_at": event_created_at,
+        "assistant_message_id": assistant_message["id"],
+        "question": redact_pii(question),
+        "bad_answer": redact_pii(assistant_message["content"]),
+        "corrected_answer": redact_pii(corrected_answer),
+        "capture_mode": capture_mode,
+        "source_event_type": source_event_type,
+        "trust_tier": trust_profile["tier"],
+        "confidence_weight": trust_profile["weight"],
+    }
+    cleaned_notes = notes.strip()
+    if cleaned_notes:
+        record["notes"] = redact_pii(cleaned_notes)
+    return record
+
+
+def build_correction_export_records() -> list[dict]:
+    with get_db() as conn:
+        feedback_rows = conn.execute(
+            """
+            SELECT
+                e.id AS event_id,
+                e.event_type,
+                e.user_identity,
+                e.conversation_id,
+                e.message_id,
+                e.metadata_json,
+                e.created_at AS event_created_at,
+                c.created_at AS conversation_created_at
+            FROM engagement_events e
+            JOIN conversations c ON c.id = e.conversation_id
+            WHERE c.training_consent = 1
+              AND e.event_type IN ('response_thumbed_down', 'response_correction_submitted')
+            ORDER BY e.created_at ASC
+            """
+        ).fetchall()
+
+        trusted_rows = conn.execute(
+            """
+            SELECT
+                c.id AS conversation_id,
+                c.owner_identity,
+                c.created_at AS conversation_created_at,
+                c.updated_at AS conversation_updated_at
+            FROM conversations c
+            WHERE c.training_consent = 1
+            ORDER BY c.created_at ASC
+            """
+        ).fetchall()
+
+        messages_by_conversation: dict[str, list[sqlite3.Row]] = {}
+        for row in feedback_rows:
+            conversation_id = row["conversation_id"]
+            if not conversation_id or conversation_id in messages_by_conversation:
+                continue
+            messages_by_conversation[conversation_id] = conn.execute(
+                """
+                SELECT id, role, content, created_at
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        for row in trusted_rows:
+            conversation_id = row["conversation_id"]
+            if conversation_id in messages_by_conversation:
+                continue
+            messages_by_conversation[conversation_id] = conn.execute(
+                """
+                SELECT id, role, content, created_at
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+    records: list[dict] = []
+    explicit_by_message_id = {
+        row["message_id"]
+        for row in feedback_rows
+        if row["event_type"] == "response_correction_submitted" and row["message_id"]
+    }
+    covered_message_ids = set(explicit_by_message_id)
+
+    for row in feedback_rows:
+        message_id = row["message_id"]
+        conversation_id = row["conversation_id"]
+        if not message_id or not conversation_id:
+            continue
+
+        messages = messages_by_conversation.get(conversation_id, [])
+        assistant_index = next((idx for idx, message in enumerate(messages) if message["id"] == message_id), None)
+        if assistant_index is None:
+            continue
+
+        assistant_message = messages[assistant_index]
+        if assistant_message["role"] != "assistant":
+            continue
+
+        metadata = safe_parse_metadata(row["metadata_json"])
+        corrected_answer = (
+            metadata.get("correctedAnswer")
+            or metadata.get("correctAnswer")
+            or metadata.get("expertCorrection")
+            or metadata.get("replacementAnswer")
+        )
+        capture_mode = "explicit_feedback"
+
+        if row["event_type"] != "response_correction_submitted" and message_id in explicit_by_message_id:
+            continue
+        if row["event_type"] != "response_correction_submitted" and not corrected_answer:
+            corrected_answer = collect_follow_up_correction_text(messages, assistant_index)
+            capture_mode = "derived_from_follow_up"
+
+        corrected_answer = (corrected_answer or "").strip()
+        if not corrected_answer:
+            continue
+
+        question = find_latest_user_question(messages, assistant_index)
+        if not question:
+            continue
+
+        records.append(
+            build_correction_record(
+                event_id=row["event_id"],
+                conversation_id=conversation_id,
+                user_identity=row["user_identity"],
+                conversation_created_at=row["conversation_created_at"],
+                event_created_at=row["event_created_at"],
+                assistant_message=assistant_message,
+                question=question,
+                corrected_answer=corrected_answer,
+                capture_mode=capture_mode,
+                source_event_type=row["event_type"],
+                notes=metadata.get("notes") or "",
+            )
+        )
+        covered_message_ids.add(message_id)
+
+    for row in trusted_rows:
+        conversation_id = row["conversation_id"]
+        trust_profile = get_user_trust_profile(row["owner_identity"])
+        if trust_profile["tier"] == "default":
+            continue
+
+        messages = messages_by_conversation.get(conversation_id, [])
+        for index, message in enumerate(messages):
+            if message["role"] != "assistant" or message["id"] in covered_message_ids:
+                continue
+
+            follow_up = messages[index + 1] if index + 1 < len(messages) else None
+            if follow_up is None or follow_up["role"] != "user":
+                continue
+
+            corrected_answer = (follow_up["content"] or "").strip()
+            if not looks_like_correction(corrected_answer):
+                continue
+
+            question = find_latest_user_question(messages, index)
+            if not question:
+                continue
+
+            records.append(
+                build_correction_record(
+                    event_id=f"trusted-follow-up:{follow_up['id']}",
+                    conversation_id=conversation_id,
+                    user_identity=row["owner_identity"],
+                    conversation_created_at=row["conversation_created_at"],
+                    event_created_at=follow_up["created_at"],
+                    assistant_message=message,
+                    question=question,
+                    corrected_answer=corrected_answer,
+                    capture_mode="trusted_user_follow_up",
+                    source_event_type="trusted_user_follow_up",
+                )
+            )
+            covered_message_ids.add(message["id"])
+
+    return records
 
 
 init_db()
@@ -862,26 +1149,34 @@ def export_training_dataset(request: Request):
             }
         )
 
-    return {"count": len(records), "records": records}
+    correction_records = build_correction_export_records()
+
+    return {
+        "count": len(records),
+        "records": records,
+        "correctionCount": len(correction_records),
+        "corrections": correction_records,
+    }
 
 
 @app.get("/admin/metrics")
 def get_admin_metrics(request: Request):
     check_admin_token(request)
+    created_at_local = analytics_created_at_local_sql()
 
     with get_db() as conn:
         overview_row = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_questions,
                 COALESCE(SUM(estimated_cost_usd), 0) AS total_spend,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of day') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_today,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of month') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_month,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of year') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_year,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') THEN 1 ELSE 0 END), 0) AS questions_30d,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', 'start of day') THEN 1 ELSE 0 END), 0) AS questions_today,
-                COALESCE(SUM(CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') AND cache_hit = 1 THEN 1 ELSE 0 END), 0) AS cache_hits_30d,
-                COUNT(DISTINCT CASE WHEN datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day') THEN user_identity END) AS active_users_30d,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', 'start of day') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_today,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', 'start of month') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_month,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', 'start of year') THEN estimated_cost_usd ELSE 0 END), 0) AS spend_year,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', '-29 day') THEN 1 ELSE 0 END), 0) AS questions_30d,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', 'start of day') THEN 1 ELSE 0 END), 0) AS questions_today,
+                COALESCE(SUM(CASE WHEN {created_at_local} >= datetime('now', 'localtime', '-29 day') AND cache_hit = 1 THEN 1 ELSE 0 END), 0) AS cache_hits_30d,
+                COUNT(DISTINCT CASE WHEN {created_at_local} >= datetime('now', 'localtime', '-29 day') THEN user_identity END) AS active_users_30d,
                 COALESCE(SUM(input_tokens), 0) AS input_tokens_total,
                 COALESCE(SUM(output_tokens), 0) AS output_tokens_total
             FROM ask_analytics
@@ -921,15 +1216,15 @@ def get_admin_metrics(request: Request):
         ).fetchall()
 
         usage_day_rows = conn.execute(
-            """
+            f"""
             SELECT
-                substr(created_at, 1, 10) AS day,
+                date({created_at_local}) AS day,
                 COUNT(*) AS question_count,
                 COALESCE(SUM(estimated_cost_usd), 0) AS total_cost_usd,
-                COALESCE(SUM(cache_hit), 0) AS cache_hits
+                COALESCE(SUM(CASE WHEN cache_hit = 1 THEN 1 ELSE 0 END), 0) AS cache_hits
             FROM ask_analytics
-            WHERE datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-29 day')
-            GROUP BY substr(created_at, 1, 10)
+            WHERE {created_at_local} >= datetime('now', 'localtime', '-29 day')
+            GROUP BY date({created_at_local})
             ORDER BY day ASC
             """
         ).fetchall()
@@ -1029,6 +1324,61 @@ def create_engagement_event(req: EngagementEventCreateRequest, request: Request)
                 req.messageId,
                 req.label,
                 json.dumps(req.metadata or {}),
+                created_at,
+            ),
+        )
+
+    return {"ok": True, "id": event_id, "createdAt": created_at}
+
+
+@app.post("/feedback/corrections")
+def create_correction_feedback(req: CorrectionFeedbackCreateRequest, request: Request):
+    user_identity = resolve_user_identity(request)
+    require_conversation_access(req.conversationId, user_identity)
+
+    corrected_answer = req.correctedAnswer.strip()
+    if not corrected_answer:
+        raise HTTPException(status_code=400, detail="Corrected answer is required")
+
+    message_id = req.messageId.strip()
+    with get_db() as conn:
+        message_row = conn.execute(
+            """
+            SELECT id, role
+            FROM messages
+            WHERE id = ? AND conversation_id = ?
+            """,
+            (message_id, req.conversationId),
+        ).fetchone()
+
+        if message_row is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if message_row["role"] != "assistant":
+            raise HTTPException(status_code=400, detail="Corrections can only target assistant messages")
+
+        event_id = str(uuid.uuid4())
+        created_at = now_iso()
+        conn.execute(
+            """
+            INSERT INTO engagement_events (
+                id, event_type, user_identity, conversation_id, message_id, label, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                "response_correction_submitted",
+                user_identity,
+                req.conversationId,
+                message_id,
+                "expert_correction",
+                json.dumps(
+                    {
+                        "correctedAnswer": corrected_answer,
+                        "notes": (req.notes or "").strip(),
+                        "source": "expert_feedback",
+                    }
+                ),
                 created_at,
             ),
         )

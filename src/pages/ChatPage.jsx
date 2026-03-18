@@ -109,6 +109,14 @@ export default function ChatPage() {
     });
   }
 
+  async function handleMessageCorrection(message, correctedAnswer, notes) {
+    if (!activeConversationId) {
+      throw new Error('Select a conversation before submitting a correction.');
+    }
+
+    return conversationService.submitCorrection(activeConversationId, message.id, correctedAnswer, notes);
+  }
+
   async function handleSuggestionLike(suggestion, message) {
     await conversationService.trackEngagement({
       eventType: 'suggestion_thumbed_up',
@@ -167,6 +175,7 @@ export default function ChatPage() {
                 onSuggestionClick={handleSuggestionClick}
                 onMessageLike={handleMessageLike}
                 onMessageDislike={handleMessageDislike}
+                onMessageCorrection={handleMessageCorrection}
                 onSuggestionLike={handleSuggestionLike}
                 onSuggestionDislike={handleSuggestionDislike}
               />
