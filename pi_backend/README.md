@@ -69,7 +69,7 @@ For a durable production setup, keep the Raspberry Pi app as a normal Git checko
 - code checkout: `/home/amcgrean/agility-ai`
 - env file: `/etc/agility-ai/agility.env`
 - persistent app data: `/home/amcgrean/agility-ai-data`
-- Pi-only helper scripts: `/home/amcgrean/agility-ai-local`
+- Pi-only helper scripts and virtualenv: `/home/amcgrean/agility-ai-local`
 
 `server.py` supports these path overrides:
 

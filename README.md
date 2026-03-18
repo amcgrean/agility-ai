@@ -65,7 +65,7 @@ The app is organized by `components`, `hooks`, `pages`, and `services` to make f
 2. Store Pi-local state outside the repo:
    - env: `/etc/agility-ai/agility.env`
    - data: `/home/amcgrean/agility-ai-data`
-   - local scripts: `/home/amcgrean/agility-ai-local`
+   - local scripts + venv: `/home/amcgrean/agility-ai-local`
 3. Build the frontend with `npm run build`.
 4. Restart the FastAPI service after pulling changes so startup migrations run and the latest UI is served.
 5. For the current laptop-driven flow, use `scripts/deploy-pi.ps1` after changes are committed and pushed.
