@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -63,7 +63,7 @@ export default function ChatPage() {
 
   const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
 
-  function exportPdf() {
+  const exportPdf = useCallback(() => {
     if (!activeConversation) return;
     const doc = new jsPDF();
     const content = messages
@@ -72,16 +72,16 @@ export default function ChatPage() {
     const lines = doc.splitTextToSize(content || 'No messages', 180);
     doc.text(lines, 10, 10);
     doc.save(`${activeConversation.title || 'conversation'}.pdf`);
-  }
+  }, [activeConversation, messages]);
 
-  function shareConversation() {
+  const shareConversation = useCallback(() => {
     if (!activeConversationId) return;
     const url = `${window.location.origin}/share/${activeConversationId}`;
     navigator.clipboard.writeText(url);
     alert('Share link copied to clipboard.');
-  }
+  }, [activeConversationId]);
 
-  async function handleSuggestionClick(suggestion, message) {
+  const handleSuggestionClick = useCallback(async (suggestion, message) => {
     setDraft(suggestion);
     inputRef.current?.focus();
 
@@ -94,9 +94,9 @@ export default function ChatPage() {
         source: 'assistant_related_questions',
       },
     });
-  }
+  }, [activeConversationId, setDraft]);
 
-  async function handleMessageDislike(message) {
+  const handleMessageDislike = useCallback(async (message) => {
     await conversationService.trackEngagement({
       eventType: 'response_thumbed_down',
       conversationId: activeConversationId,
@@ -107,9 +107,9 @@ export default function ChatPage() {
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
-  }
+  }, [activeConversationId, activeConversation?.title]);
 
-  async function handleMessageLike(message) {
+  const handleMessageLike = useCallback(async (message) => {
     await conversationService.trackEngagement({
       eventType: 'response_thumbed_up',
       conversationId: activeConversationId,
@@ -120,17 +120,17 @@ export default function ChatPage() {
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
-  }
+  }, [activeConversationId, activeConversation?.title]);
 
-  async function handleMessageCorrection(message, correctedAnswer, notes) {
+  const handleMessageCorrection = useCallback(async (message, correctedAnswer, notes) => {
     if (!activeConversationId) {
       throw new Error('Select a conversation before submitting a correction.');
     }
 
     return conversationService.submitCorrection(activeConversationId, message.id, correctedAnswer, notes);
-  }
+  }, [activeConversationId]);
 
-  async function handleSuggestionLike(suggestion, message) {
+  const handleSuggestionLike = useCallback(async (suggestion, message) => {
     await conversationService.trackEngagement({
       eventType: 'suggestion_thumbed_up',
       conversationId: activeConversationId,
@@ -140,9 +140,9 @@ export default function ChatPage() {
         source: 'assistant_related_questions',
       },
     });
-  }
+  }, [activeConversationId]);
 
-  async function handleSuggestionDislike(suggestion, message) {
+  const handleSuggestionDislike = useCallback(async (suggestion, message) => {
     await conversationService.trackEngagement({
       eventType: 'suggestion_thumbed_down',
       conversationId: activeConversationId,
@@ -152,7 +152,7 @@ export default function ChatPage() {
         source: 'assistant_related_questions',
       },
     });
-  }
+  }, [activeConversationId]);
 
   return (
     <main className="flex min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
