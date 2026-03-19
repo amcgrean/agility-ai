@@ -64,11 +64,11 @@ export default function AdminPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mx-auto max-w-7xl px-3 py-5 sm:px-6 sm:py-8">
         <div className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-300">Admin Metrics</p>
-            <h1 className="mt-2 text-3xl font-semibold">Usage, spend, and question trends</h1>
+            <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Usage, spend, and question trends</h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-400">
               This dashboard pulls from the Pi analytics database and shows who is using the assistant, what they are asking,
               and how much the OpenAI traffic is costing over time.
@@ -90,13 +90,13 @@ export default function AdminPage() {
               type="password"
             />
             <button
-              className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-400"
+              className="w-full rounded-xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-400 md:w-auto"
               onClick={() => setToken(draftToken.trim())}
             >
               Load dashboard
             </button>
             <button
-              className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 hover:bg-slate-800"
+              className="w-full rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 hover:bg-slate-800 md:w-auto"
               onClick={() => {
                 localStorage.removeItem(TOKEN_STORAGE_KEY);
                 setDraftToken('');
@@ -125,7 +125,7 @@ export default function AdminPage() {
 
         <div className="mt-8 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
           <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-xl font-semibold">Trending questions</h2>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Top repeated asks</p>
             </div>
@@ -146,7 +146,7 @@ export default function AdminPage() {
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-xl font-semibold">Feedback signals</h2>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Engagement events</p>
             </div>
@@ -166,7 +166,7 @@ export default function AdminPage() {
 
         <div className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-xl font-semibold">User cost breakdown</h2>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">By account</p>
             </div>
@@ -205,7 +205,7 @@ export default function AdminPage() {
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-xl font-semibold">30-day usage</h2>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Daily rollup</p>
             </div>
@@ -230,7 +230,7 @@ export default function AdminPage() {
         </div>
 
         <section className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-xl font-semibold">Recent feedback activity</h2>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Latest events</p>
           </div>

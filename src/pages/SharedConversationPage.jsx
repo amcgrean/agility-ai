@@ -16,9 +16,10 @@ export default function SharedConversationPage() {
   }, [conversationId]);
 
   return (
-    <main className="mx-auto min-h-screen max-w-4xl p-6 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Shared conversation</h1>
+    <main className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-4xl">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-xl font-semibold sm:text-2xl">Shared conversation</h1>
         <Link className="text-emerald-500 hover:underline" to="/">
           Open assistant
         </Link>
@@ -31,6 +32,7 @@ export default function SharedConversationPage() {
       ) : (
         <p>Conversation not found.</p>
       )}
+      </div>
     </main>
   );
 }

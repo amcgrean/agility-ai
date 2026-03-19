@@ -140,19 +140,19 @@ export default function ChatMessage({
 
   return (
     <article
-      className={`max-w-3xl rounded-2xl px-4 py-3 ${
+      className={`max-w-3xl rounded-2xl px-3 py-3 sm:px-4 ${
         isUser ? 'ml-auto bg-emerald-600/90 text-white' : 'mr-auto bg-slate-800 text-slate-100'
       }`}
     >
       {!isUser && !showTyping ? (
-        <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-700/70 pb-3">
+        <div className="mb-3 flex flex-col gap-3 border-b border-slate-700/70 pb-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
             Assistant Response
           </p>
           <button
             type="button"
             onClick={handleCopyResponse}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-600 px-3 py-1.5 text-xs text-slate-300 transition hover:border-emerald-400 hover:text-emerald-200"
+            className="inline-flex items-center gap-2 self-start rounded-full border border-slate-600 px-3 py-1.5 text-xs text-slate-300 transition hover:border-emerald-400 hover:text-emerald-200"
             title="Copy response"
           >
             <Copy className="h-4 w-4" />
@@ -180,7 +180,7 @@ export default function ChatMessage({
           className={
             isUser
               ? 'space-y-3 whitespace-pre-wrap break-words text-[15px] leading-7'
-              : 'space-y-4 break-words text-[15px] leading-7 [&_h1]:mb-3 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mb-3 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:border-slate-700 [&_h2]:pb-2 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-2 [&_ol]:pl-6 [&_li]:my-1 [&_strong]:font-semibold [&_blockquote]:my-4 [&_blockquote]:rounded-r-lg [&_blockquote]:border-l-2 [&_blockquote]:border-slate-500 [&_blockquote]:bg-slate-900/30 [&_blockquote]:pl-4 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:text-slate-300 [&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-slate-600 [&_th]:bg-slate-700 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-slate-700 [&_td]:px-3 [&_td]:py-2 [&_a]:font-medium [&_a]:text-emerald-300 [&_a]:underline'
+              : 'space-y-4 break-words text-sm leading-7 sm:text-[15px] [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-semibold sm:[&_h1]:text-2xl [&_h2]:mb-3 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:border-slate-700 [&_h2]:pb-2 [&_h2]:text-lg [&_h2]:font-semibold sm:[&_h2]:text-xl [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-5 sm:[&_ul]:pl-6 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-2 [&_ol]:pl-5 sm:[&_ol]:pl-6 [&_li]:my-1 [&_strong]:font-semibold [&_blockquote]:my-4 [&_blockquote]:rounded-r-lg [&_blockquote]:border-l-2 [&_blockquote]:border-slate-500 [&_blockquote]:bg-slate-900/30 [&_blockquote]:pl-4 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:text-slate-300 [&_table]:my-4 [&_table]:block [&_table]:overflow-x-auto sm:[&_table]:table sm:[&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-slate-600 [&_th]:bg-slate-700 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-slate-700 [&_td]:px-3 [&_td]:py-2 [&_a]:font-medium [&_a]:text-emerald-300 [&_a]:underline'
           }
         >
           {body || (message.streaming ? 'Generating response...' : '')}
@@ -229,7 +229,7 @@ export default function ChatMessage({
       ) : null}
 
       {!isUser && !showTyping ? (
-        <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -264,7 +264,7 @@ export default function ChatMessage({
               {correctionStatus === 'saved' ? 'Correction saved' : 'Submit correction'}
             </button>
           </div>
-          <p className="text-right text-xs opacity-70">{format(new Date(message.createdAt), 'p')}</p>
+          <p className="text-xs opacity-70 sm:text-right">{format(new Date(message.createdAt), 'p')}</p>
         </div>
       ) : (
         <p className="mt-2 text-right text-xs opacity-70">{format(new Date(message.createdAt), 'p')}</p>

@@ -5,8 +5,10 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  min-width: 320px;
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
 }

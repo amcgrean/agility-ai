@@ -24,6 +24,7 @@ export default function ChatPage() {
   } = useChat();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') !== 'light');
   const [currentUser, setCurrentUser] = useState(null);
   const inputRef = useRef(null);
@@ -46,6 +47,18 @@ export default function ChatPage() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    function handleResize() {
+      if (window.innerWidth >= 768) {
+        setMobileSidebarOpen(false);
+      }
+    }
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
@@ -142,7 +155,7 @@ export default function ChatPage() {
   }
 
   return (
-    <main className="flex h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <main className="flex min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((prev) => !prev)}
@@ -152,9 +165,11 @@ export default function ChatPage() {
         onCreate={newConversation}
         onRename={renameConversation}
         onDelete={deleteConversation}
+        mobileOpen={mobileSidebarOpen}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
       />
 
-      <section className="flex flex-1 flex-col">
+      <section className="flex min-h-screen min-w-0 flex-1 flex-col">
         <TopBar
           darkMode={darkMode}
           onToggleTheme={() => setDarkMode((prev) => !prev)}
@@ -162,9 +177,10 @@ export default function ChatPage() {
           onShare={shareConversation}
           onOpenAdmin={() => navigate('/admin')}
           currentUser={currentUser}
+          onOpenSidebar={() => setMobileSidebarOpen(true)}
         />
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-6">
+        <div className="flex-1 space-y-4 overflow-y-auto p-3 sm:p-4 md:p-6">
           {messages.length === 0 ? (
             <p className="text-sm opacity-70">Start a conversation by asking a question.</p>
           ) : (
