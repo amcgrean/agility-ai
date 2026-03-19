@@ -3,19 +3,23 @@ import logging
 import os
 import re
 import sqlite3
+import subprocess
+import sys
+import threading
 import uuid
 from base64 import urlsafe_b64decode
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 import faiss
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from providers import OpenAIProvider, ProviderAnswer
 
@@ -29,6 +33,7 @@ META_FILE = DATA_DIR / "agility_meta.jsonl"
 DB_FILE = DATA_DIR / "agility_ai.db"
 CACHE_DB_FILE = Path(os.getenv("CACHE_DB_FILE", str(DATA_DIR / "agility_cache.db"))).expanduser()
 LEGACY_CONVERSATIONS_FILE = DATA_DIR / "conversations.json"
+UPLOADS_DIR = DATA_DIR / "uploads"
 
 RETRIEVAL_TOP_K_CANDIDATES = int(os.getenv("RETRIEVAL_TOP_K_CANDIDATES", os.getenv("TOP_K", "10")))
 FINAL_TOP_K = int(os.getenv("FINAL_TOP_K", "4"))
@@ -40,6 +45,14 @@ MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "700"))
 REQUEST_CACHE_TTL_SECONDS = int(os.getenv("REQUEST_CACHE_TTL_SECONDS", "300"))
 ENABLE_DEBUG_MODE = os.getenv("ENABLE_DEBUG_MODE", "false").lower() == "true"
 ENABLE_HYBRID_RETRIEVAL_HINT = os.getenv("ENABLE_HYBRID_RETRIEVAL_HINT", "true").lower() == "true"
+MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(8 * 1024 * 1024)))
+MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "4000"))
+ALLOWED_IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
 
 
 def parse_identity_list(env_name: str) -> set[str]:
@@ -65,18 +78,56 @@ logger = logging.getLogger("agility_ai")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 provider = OpenAIProvider()
+index: faiss.Index | None = None
+meta: list[dict[str, Any]] = []
+retrieval_lock = threading.Lock()
 
-index = faiss.read_index(str(INDEX_FILE))
 
-meta = []
-with open(META_FILE, "r", encoding="utf-8") as f:
-    for line in f:
-        meta.append(json.loads(line))
+def load_retrieval_artifacts() -> dict[str, Any]:
+    global index, meta
+    with retrieval_lock:
+        if not INDEX_FILE.exists() or not META_FILE.exists():
+            index = None
+            meta = []
+            return {
+                "ready": False,
+                "indexPath": str(INDEX_FILE),
+                "metaPath": str(META_FILE),
+                "reason": "missing index artifacts",
+            }
+
+        loaded_meta: list[dict[str, Any]] = []
+        with open(META_FILE, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if line:
+                    loaded_meta.append(json.loads(line))
+
+        index = faiss.read_index(str(INDEX_FILE))
+        meta = loaded_meta
+        return {
+            "ready": True,
+            "indexPath": str(INDEX_FILE),
+            "metaPath": str(META_FILE),
+            "chunkCount": len(meta),
+            "contentDomains": sorted({item.get("content_domain") for item in meta if item.get("content_domain")}),
+            "accessScopes": sorted({item.get("access_scope") for item in meta if item.get("access_scope")}),
+        }
+
+
+def ensure_retrieval_ready() -> None:
+    if index is None or not meta:
+        status = load_retrieval_artifacts()
+        if not status.get("ready"):
+            raise HTTPException(status_code=503, detail="Retrieval index is not ready")
 
 app = FastAPI()
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 if (UI_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=UI_DIR / "assets"), name="ui-assets")
+if UPLOADS_DIR.exists():
+    app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
 class AskRequest(BaseModel):
@@ -86,10 +137,29 @@ class AskRequest(BaseModel):
 
 class ConversationCreateRequest(BaseModel):
     title: str | None = None
+    folderId: str | None = None
 
 
 class ConversationUpdateRequest(BaseModel):
+    title: str | None = None
+    folderId: str | None = None
+
+
+class FolderCreateRequest(BaseModel):
     title: str
+
+
+class FolderUpdateRequest(BaseModel):
+    title: str
+
+
+class MessageAttachmentInput(BaseModel):
+    id: str
+    kind: str = "image"
+    name: str
+    url: str
+    mimeType: str | None = None
+    sizeBytes: int | None = None
 
 
 class MessageCreateRequest(BaseModel):
@@ -98,6 +168,7 @@ class MessageCreateRequest(BaseModel):
     role: str
     content: str
     createdAt: str
+    attachments: list[MessageAttachmentInput] = Field(default_factory=list)
 
 
 class EngagementEventCreateRequest(BaseModel):
@@ -117,6 +188,21 @@ class CorrectionFeedbackCreateRequest(BaseModel):
 
 class TrainingConsentUpdateRequest(BaseModel):
     enabled: bool
+
+
+class AdminReindexRequest(BaseModel):
+    sourceDir: str | None = None
+    outputDir: str | None = None
+    chunksFile: str | None = None
+    mcpExportFile: str | None = None
+    envFile: str | None = None
+    corpusName: str | None = None
+    chunkSize: int = 1100
+    chunkOverlap: int = 200
+    batchSize: int = 64
+    skipUnchanged: bool = True
+    skipIndex: bool = False
+    reloadOnly: bool = False
 
 
 def now_iso() -> str:
@@ -151,9 +237,21 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 owner_identity TEXT NOT NULL DEFAULT 'local',
+                folder_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS folders (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                owner_identity TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_folders_owner_updated
+            ON folders(owner_identity, updated_at);
 
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
@@ -166,6 +264,22 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
             ON messages(conversation_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'image',
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_message_attachments_message
+            ON message_attachments(message_id, created_at);
 
             CREATE TABLE IF NOT EXISTS engagement_events (
                 id TEXT PRIMARY KEY,
@@ -211,6 +325,7 @@ def init_db() -> None:
             """
         )
         ensure_column(conn, "conversations", "owner_identity", "TEXT NOT NULL DEFAULT 'local'")
+        ensure_column(conn, "conversations", "folder_id", "TEXT")
         ensure_column(conn, "conversations", "training_consent", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "conversations", "memory_summary", "TEXT")
         ensure_column(conn, "engagement_events", "user_identity", "TEXT NOT NULL DEFAULT 'local'")
@@ -246,6 +361,18 @@ def estimate_cost(usage: dict) -> float:
 def normalize_question(question: str) -> str:
     normalized = re.sub(r"\s+", " ", question.strip().lower())
     return normalized[:500]
+
+
+def sanitize_question(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", (question or "").strip())
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Question is required")
+    if len(normalized) > MAX_QUESTION_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Question exceeds {MAX_QUESTION_CHARS} characters",
+        )
+    return normalized
 
 
 def jaccard_similarity(a: str, b: str) -> float:
@@ -328,7 +455,10 @@ def get_conversation_context(conversation_id: str, user_identity: str) -> tuple[
     ]
     memory_summary = row["memory_summary"] if row else None
 
-    if len(messages) >= CONVERSATION_SUMMARY_TRIGGER_MESSAGES:
+    should_refresh_summary = len(messages) >= CONVERSATION_SUMMARY_TRIGGER_MESSAGES and (
+        memory_summary is None or len(messages) % CONVERSATION_SUMMARY_TRIGGER_MESSAGES == 0
+    )
+    if should_refresh_summary:
         try:
             recomputed_summary = provider.summarize_messages(
                 [{"role": row["role"], "content": row["content"]} for row in messages],
@@ -462,10 +592,68 @@ def migrate_legacy_conversations() -> None:
     LEGACY_CONVERSATIONS_FILE.rename(LEGACY_CONVERSATIONS_FILE.with_suffix(".json.migrated"))
 
 
+def serialize_folder(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def list_folders(user_identity: str) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, created_at, updated_at
+            FROM folders
+            WHERE owner_identity = ?
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            (user_identity,),
+        ).fetchall()
+
+    return [serialize_folder(row) for row in rows]
+
+
+def require_folder_access(folder_id: str, user_identity: str) -> None:
+    with get_db() as conn:
+        folder = conn.execute(
+            "SELECT owner_identity FROM folders WHERE id = ?",
+            (folder_id,),
+        ).fetchone()
+
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    if folder["owner_identity"] != user_identity:
+        raise HTTPException(status_code=403, detail="Folder does not belong to this user")
+
+
+def validate_folder_reference(folder_id: str | None, user_identity: str) -> str | None:
+    normalized = (folder_id or "").strip() or None
+    if normalized:
+        require_folder_access(normalized, user_identity)
+    return normalized
+
+
+def serialize_attachment(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "name": row["name"],
+        "url": row["url"],
+        "mimeType": row["mime_type"],
+        "sizeBytes": row["size_bytes"],
+        "createdAt": row["created_at"],
+    }
+
+
 def serialize_conversation(row: sqlite3.Row, messages: list[dict]) -> dict:
     return {
         "id": row["id"],
         "title": row["title"],
+        "folderId": row["folder_id"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "trainingConsent": bool(row["training_consent"]),
@@ -477,7 +665,7 @@ def list_conversations_with_messages(user_identity: str) -> list[dict]:
     with get_db() as conn:
         conversations = conn.execute(
             """
-            SELECT id, title, owner_identity, training_consent, created_at, updated_at
+            SELECT id, title, owner_identity, folder_id, training_consent, created_at, updated_at
             FROM conversations
             WHERE owner_identity = ?
             ORDER BY updated_at DESC, created_at DESC
@@ -497,6 +685,30 @@ def list_conversations_with_messages(user_identity: str) -> list[dict]:
             (user_identity,),
         ).fetchall()
 
+        attachment_rows = conn.execute(
+            """
+            SELECT
+                a.id,
+                a.message_id,
+                a.conversation_id,
+                a.kind,
+                a.name,
+                a.url,
+                a.mime_type,
+                a.size_bytes,
+                a.created_at
+            FROM message_attachments a
+            JOIN conversations c ON c.id = a.conversation_id
+            WHERE c.owner_identity = ?
+            ORDER BY a.created_at ASC
+            """,
+            (user_identity,),
+        ).fetchall()
+
+    attachments_by_message: dict[str, list[dict]] = {}
+    for attachment in attachment_rows:
+        attachments_by_message.setdefault(attachment["message_id"], []).append(serialize_attachment(attachment))
+
     messages_by_conversation: dict[str, list[dict]] = {}
     for message in messages:
         messages_by_conversation.setdefault(message["conversation_id"], []).append(
@@ -505,6 +717,7 @@ def list_conversations_with_messages(user_identity: str) -> list[dict]:
                 "role": message["role"],
                 "content": message["content"],
                 "createdAt": message["created_at"],
+                "attachments": attachments_by_message.get(message["id"], []),
             }
         )
 
@@ -636,6 +849,74 @@ def check_admin_token(request: Request) -> None:
     check_export_token(request)
 
 
+def run_admin_reindex_job(req: AdminReindexRequest) -> dict[str, Any]:
+    scripts_dir = BASE / "scripts"
+    refresh_script = scripts_dir / "refresh_agility_docs.py"
+    if not refresh_script.exists():
+        raise HTTPException(status_code=503, detail="Refresh script is not available on this server")
+
+    if req.reloadOnly:
+        return load_retrieval_artifacts()
+
+    source_dir = req.sourceDir or os.getenv("AGILITY_DOC_SOURCE_DIR")
+    output_dir = req.outputDir or os.getenv("AGILITY_DOC_OUTPUT_DIR")
+    if not source_dir or not output_dir:
+        raise HTTPException(status_code=400, detail="AGILITY_DOC_SOURCE_DIR and AGILITY_DOC_OUTPUT_DIR are required")
+
+    command = [
+        sys.executable,
+        str(refresh_script),
+        "--source-dir",
+        source_dir,
+        "--output-dir",
+        output_dir,
+        "--chunk-size",
+        str(req.chunkSize),
+        "--chunk-overlap",
+        str(req.chunkOverlap),
+        "--batch-size",
+        str(req.batchSize),
+    ]
+    if req.envFile:
+        command.extend(["--env-file", req.envFile])
+    if req.chunksFile:
+        command.extend(["--chunks-file", req.chunksFile])
+    if req.mcpExportFile:
+        command.extend(["--mcp-export-file", req.mcpExportFile])
+    if req.corpusName:
+        command.extend(["--corpus-name", req.corpusName])
+    if req.skipUnchanged:
+        command.append("--skip-unchanged")
+    if req.skipIndex:
+        command.append("--skip-index")
+
+    completed = subprocess.run(
+        command,
+        cwd=str(BASE),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Reindex command failed",
+                "stdout": completed.stdout[-4000:],
+                "stderr": completed.stderr[-4000:],
+            },
+        )
+
+    status = load_retrieval_artifacts()
+    return {
+        "ok": True,
+        "command": command,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-4000:],
+        "retrieval": status,
+    }
+
+
 def stable_identity_hash(identity: str) -> str:
     salt = os.getenv("TRAINING_EXPORT_SALT", "agility-training")
     return sha256(f"{salt}:{identity}".encode("utf-8")).hexdigest()
@@ -729,6 +1010,132 @@ def summarize_feedback() -> list[dict]:
         ).fetchall()
 
     return [{"eventType": row["event_type"], "count": row["count"]} for row in rows]
+
+
+def build_prompt_starters(user_identity: str, limit: int = 6) -> dict[str, list[dict]]:
+    created_at_local = analytics_created_at_local_sql()
+    with get_db() as conn:
+        trending_rows = conn.execute(
+            f"""
+            SELECT
+                normalized_question,
+                MIN(question) AS question,
+                COUNT(*) AS ask_count,
+                MAX(created_at) AS last_asked_at
+            FROM ask_analytics
+            WHERE normalized_question != ''
+              AND {created_at_local} >= datetime('now', 'localtime', '-29 day')
+            GROUP BY normalized_question
+            ORDER BY ask_count DESC, last_asked_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        recent_rows = conn.execute(
+            """
+            SELECT question, MAX(created_at) AS last_asked_at
+            FROM ask_analytics
+            WHERE user_identity = ?
+            GROUP BY normalized_question
+            ORDER BY last_asked_at DESC
+            LIMIT ?
+            """,
+            (user_identity, max(2, min(limit, 4))),
+        ).fetchall()
+
+        suggestion_rows = conn.execute(
+            """
+            SELECT label, COUNT(*) AS use_count, MAX(created_at) AS last_used_at
+            FROM engagement_events
+            WHERE event_type IN ('follow_up_selected', 'prompt_starter_selected', 'suggestion_thumbed_up')
+              AND label IS NOT NULL
+              AND trim(label) != ''
+            GROUP BY lower(label)
+            ORDER BY use_count DESC, last_used_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    trending_questions = [
+        {
+            "label": row["question"],
+            "count": int(row["ask_count"] or 0),
+            "lastAskedAt": row["last_asked_at"],
+        }
+        for row in trending_rows
+        if row["question"]
+    ]
+
+    starters: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+
+    for row in recent_rows:
+        label = (row["question"] or "").strip()
+        normalized = label.lower()
+        if not label or normalized in seen_labels:
+            continue
+        starters.append({"label": label, "source": "recent"})
+        seen_labels.add(normalized)
+
+    for row in trending_questions:
+        label = (row["label"] or "").strip()
+        normalized = label.lower()
+        if not label or normalized in seen_labels:
+            continue
+        starters.append({"label": label, "source": "trending"})
+        seen_labels.add(normalized)
+        if len(starters) >= limit:
+            break
+
+    related_topics: list[dict[str, Any]] = []
+    for row in suggestion_rows:
+        label = (row["label"] or "").strip()
+        normalized = label.lower()
+        if not label or normalized in seen_labels:
+            continue
+        related_topics.append(
+            {
+                "label": label,
+                "source": "related_topic",
+                "count": int(row["use_count"] or 0),
+                "lastUsedAt": row["last_used_at"],
+            }
+        )
+        seen_labels.add(normalized)
+        if len(related_topics) >= limit:
+            break
+
+    return {
+        "starters": starters[:limit],
+        "trendingQuestions": trending_questions[:limit],
+        "relatedTopics": related_topics[:limit],
+    }
+
+
+def extract_follow_up_questions(answer_text: str) -> list[str]:
+    section_match = re.search(
+        r"(^|\n)##\s+(Related Questions|Want to Learn More\?)\s*\n([\s\S]*?)(?=\n##\s+|\s*$)",
+        answer_text or "",
+        flags=re.IGNORECASE,
+    )
+    if not section_match:
+        return []
+
+    seen: set[str] = set()
+    suggestions: list[str] = []
+    for raw_line in section_match.group(3).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        cleaned = re.sub(r"^[-*]\s+", "", line)
+        cleaned = re.sub(r"^\d+\.\s+", "", cleaned).strip()
+        normalized = cleaned.lower()
+        if cleaned and normalized not in seen:
+            seen.add(normalized)
+            suggestions.append(cleaned)
+    return suggestions[:4]
 
 
 def analytics_created_at_local_sql(column_name: str = "created_at") -> str:
@@ -976,11 +1383,17 @@ init_db()
 init_cache_db()
 cleanup_expired_cache()
 migrate_legacy_conversations()
+load_retrieval_artifacts()
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    retrieval_ready = index is not None and bool(meta)
+    return {
+        "status": "ok",
+        "retrievalReady": retrieval_ready,
+        "chunkCount": len(meta),
+    }
 
 
 @app.get("/conversations")
@@ -989,13 +1402,28 @@ def list_conversations(request: Request):
     return list_conversations_with_messages(user_identity)
 
 
+@app.get("/folders")
+def get_folders(request: Request):
+    user_identity = resolve_user_identity(request)
+    return list_folders(user_identity)
+
+
 @app.get("/users/me")
 def get_current_user(request: Request):
     user_identity = resolve_user_identity(request)
+    trust_profile = get_user_trust_profile(user_identity)
     return {
         "identity": user_identity,
         "trainingConsent": get_user_training_consent(user_identity),
+        "trustTier": trust_profile["tier"],
+        "canSubmitCorrections": trust_profile["tier"] in {"expert", "staff"},
     }
+
+
+@app.get("/prompt-starters")
+def get_prompt_starters(request: Request):
+    user_identity = resolve_user_identity(request)
+    return build_prompt_starters(user_identity)
 
 
 @app.get("/users/me/training-consent")
@@ -1035,37 +1463,107 @@ def create_conversation(req: ConversationCreateRequest, request: Request):
     conversation_id = str(uuid.uuid4())
     timestamp = now_iso()
     user_identity = resolve_user_identity(request)
+    folder_id = validate_folder_reference(req.folderId, user_identity)
 
     with get_db() as conn:
         default_consent = get_user_training_consent(user_identity)
         conn.execute(
             """
-            INSERT INTO conversations (id, title, owner_identity, training_consent, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, title, owner_identity, folder_id, training_consent, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (conversation_id, req.title or "New conversation", user_identity, 1 if default_consent else 0, timestamp, timestamp),
+            (
+                conversation_id,
+                req.title or "New conversation",
+                user_identity,
+                folder_id,
+                1 if default_consent else 0,
+                timestamp,
+                timestamp,
+            ),
         )
 
     return get_conversation_for_user(conversation_id, user_identity)
 
 
+@app.post("/folders")
+def create_folder(req: FolderCreateRequest, request: Request):
+    user_identity = resolve_user_identity(request)
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Folder title is required")
+
+    folder_id = str(uuid.uuid4())
+    timestamp = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO folders (id, title, owner_identity, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (folder_id, title[:80], user_identity, timestamp, timestamp),
+        )
+
+    return next((folder for folder in list_folders(user_identity) if folder["id"] == folder_id), None)
+
+
 @app.patch("/conversations/{conversation_id}")
 def update_conversation(conversation_id: str, req: ConversationUpdateRequest, request: Request):
     user_identity = resolve_user_identity(request)
+    provided_fields = getattr(req, "model_fields_set", set())
+    folder_id = validate_folder_reference(req.folderId, user_identity) if "folderId" in provided_fields else None
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if "title" in provided_fields:
+        updates.append("title = ?")
+        params.append(req.title)
+    if "folderId" in provided_fields:
+        updates.append("folder_id = ?")
+        params.append(folder_id)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No conversation changes were provided")
+
+    updates.append("updated_at = ?")
+    params.append(now_iso())
+    params.extend([conversation_id, user_identity])
+
     with get_db() as conn:
         result = conn.execute(
-            """
+            f"""
             UPDATE conversations
-            SET title = ?, updated_at = ?
+            SET {", ".join(updates)}
             WHERE id = ? AND owner_identity = ?
             """,
-            (req.title, now_iso(), conversation_id, user_identity),
+            params,
         )
 
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     return get_conversation_for_user(conversation_id, user_identity)
+
+
+@app.patch("/folders/{folder_id}")
+def update_folder(folder_id: str, req: FolderUpdateRequest, request: Request):
+    user_identity = resolve_user_identity(request)
+    require_folder_access(folder_id, user_identity)
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Folder title is required")
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE folders
+            SET title = ?, updated_at = ?
+            WHERE id = ? AND owner_identity = ?
+            """,
+            (title[:80], now_iso(), folder_id, user_identity),
+        )
+
+    return next((folder for folder in list_folders(user_identity) if folder["id"] == folder_id), None)
 
 
 @app.delete("/conversations/{conversation_id}")
@@ -1078,11 +1576,38 @@ def delete_conversation(conversation_id: str, request: Request):
     return {"ok": True}
 
 
+@app.delete("/folders/{folder_id}")
+def delete_folder(folder_id: str, request: Request):
+    user_identity = resolve_user_identity(request)
+    require_folder_access(folder_id, user_identity)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE conversations SET folder_id = NULL, updated_at = ? WHERE folder_id = ? AND owner_identity = ?",
+            (now_iso(), folder_id, user_identity),
+        )
+        conn.execute("DELETE FROM folders WHERE id = ? AND owner_identity = ?", (folder_id, user_identity))
+    return {"ok": True}
+
+
 @app.post("/messages")
 def append_message(req: MessageCreateRequest, request: Request):
     user_identity = resolve_user_identity(request)
     ensure_conversation(req.conversationId, user_identity)
     require_conversation_access(req.conversationId, user_identity)
+    attachment_rows = [
+        (
+            attachment.id,
+            req.id,
+            req.conversationId,
+            attachment.kind or "image",
+            attachment.name,
+            attachment.url,
+            attachment.mimeType,
+            attachment.sizeBytes,
+            req.createdAt,
+        )
+        for attachment in req.attachments
+    ]
 
     with get_db() as conn:
         conn.execute(
@@ -1100,6 +1625,17 @@ def append_message(req: MessageCreateRequest, request: Request):
             """,
             (now_iso(), req.conversationId, user_identity),
         )
+        if attachment_rows:
+            conn.execute("DELETE FROM message_attachments WHERE message_id = ?", (req.id,))
+            conn.executemany(
+                """
+                INSERT INTO message_attachments (
+                    id, message_id, conversation_id, kind, name, url, mime_type, size_bytes, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                attachment_rows,
+            )
 
     conversation_title = None
     if req.role == "user":
@@ -1110,7 +1646,45 @@ def append_message(req: MessageCreateRequest, request: Request):
         "role": req.role,
         "content": req.content,
         "createdAt": req.createdAt,
+        "attachments": [attachment.model_dump() for attachment in req.attachments],
         "conversationTitle": conversation_title,
+    }
+
+
+@app.post("/uploads/images")
+async def upload_image(
+    request: Request,
+    file: UploadFile = File(...),
+    conversationId: str | None = Form(default=None),
+):
+    user_identity = resolve_user_identity(request)
+    if conversationId:
+        require_conversation_access(conversationId, user_identity)
+
+    mime_type = (file.content_type or "").lower()
+    if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Only PNG, JPG, WEBP, and GIF image uploads are supported")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+    if len(raw) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail=f"Image exceeds {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+
+    suffix = Path(file.filename or "upload").suffix.lower() or ".bin"
+    upload_id = str(uuid.uuid4())
+    stored_name = f"{upload_id}{suffix}"
+    stored_path = UPLOADS_DIR / stored_name
+    stored_path.write_bytes(raw)
+
+    return {
+        "id": upload_id,
+        "kind": "image",
+        "name": file.filename or stored_name,
+        "mimeType": mime_type,
+        "sizeBytes": len(raw),
+        "url": f"/uploads/{stored_name}",
+        "createdAt": now_iso(),
     }
 
 
@@ -1303,6 +1877,18 @@ def get_admin_metrics(request: Request):
     }
 
 
+@app.get("/admin/retrieval-status")
+def get_retrieval_status(request: Request):
+    check_admin_token(request)
+    return load_retrieval_artifacts()
+
+
+@app.post("/admin/reindex")
+def admin_reindex(req: AdminReindexRequest, request: Request):
+    check_admin_token(request)
+    return run_admin_reindex_job(req)
+
+
 @app.post("/engagement")
 def create_engagement_event(req: EngagementEventCreateRequest, request: Request):
     event_id = str(uuid.uuid4())
@@ -1336,6 +1922,7 @@ def create_engagement_event(req: EngagementEventCreateRequest, request: Request)
 def create_correction_feedback(req: CorrectionFeedbackCreateRequest, request: Request):
     user_identity = resolve_user_identity(request)
     require_conversation_access(req.conversationId, user_identity)
+    trust_profile = get_user_trust_profile(user_identity)
 
     corrected_answer = req.correctedAnswer.strip()
     if not corrected_answer:
@@ -1372,12 +1959,14 @@ def create_correction_feedback(req: CorrectionFeedbackCreateRequest, request: Re
                 user_identity,
                 req.conversationId,
                 message_id,
-                "expert_correction",
+                "admin_correction" if trust_profile["tier"] in {"expert", "staff"} else "user_correction",
                 json.dumps(
                     {
                         "correctedAnswer": corrected_answer,
                         "notes": (req.notes or "").strip(),
-                        "source": "expert_feedback",
+                        "source": "expert_feedback" if trust_profile["tier"] in {"expert", "staff"} else "user_feedback",
+                        "trustTier": trust_profile["tier"],
+                        "trustWeight": trust_profile["weight"],
                     }
                 ),
                 created_at,
@@ -1395,12 +1984,15 @@ def home():
 @app.post("/ask")
 def ask(req: AskRequest, request: Request):
     user_identity = resolve_user_identity(request)
-    question = req.question.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="Question is required")
+    question = sanitize_question(req.question)
+    normalized_question = normalize_question(question)
+    ensure_retrieval_ready()
+
+    if req.conversationId:
+        require_conversation_access(req.conversationId, user_identity)
 
     cache_scope = req.conversationId or "global"
-    cache_key = sha256(f"{user_identity}:{cache_scope}:{question.lower()}".encode("utf-8")).hexdigest()
+    cache_key = sha256(f"{user_identity}:{cache_scope}:{normalized_question}".encode("utf-8")).hexdigest()
     cached = get_cached_answer(cache_key)
     if cached:
         record_ask_analytics(
@@ -1411,28 +2003,36 @@ def ask(req: AskRequest, request: Request):
             estimated_cost=float(cached.get("estimatedCostUsd", 0.0)) if isinstance(cached, dict) else 0.0,
             cache_hit=True,
         )
+        if isinstance(cached, dict) and "promptStarters" not in cached:
+            cached["promptStarters"] = build_prompt_starters(user_identity)
         return cached
 
-    emb = provider.embedding(question)
-    q = np.array([emb]).astype("float32")
-    faiss.normalize_L2(q)
+    try:
+        emb = provider.embedding(question)
+        q = np.array([emb]).astype("float32")
+        faiss.normalize_L2(q)
 
-    distances, indices = index.search(q, RETRIEVAL_TOP_K_CANDIDATES)
-    contexts = select_contexts(question, indices, distances)
+        distances, indices = index.search(q, RETRIEVAL_TOP_K_CANDIDATES)
+        contexts = select_contexts(question, indices, distances)
+    except Exception as exc:
+        logger.exception("Failed during retrieval for conversation %s", req.conversationId)
+        raise HTTPException(status_code=502, detail="Unable to retrieve supporting documentation right now") from exc
 
     recent_messages: list[dict] = []
     memory_summary: str | None = None
     if req.conversationId:
-        require_conversation_access(req.conversationId, user_identity)
         recent_messages, memory_summary = get_conversation_context(req.conversationId, user_identity)
-
-    answer_result: ProviderAnswer = provider.answer(
-        question,
-        contexts,
-        recent_messages=recent_messages,
-        memory_summary=memory_summary,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-    )
+    try:
+        answer_result: ProviderAnswer = provider.answer(
+            question,
+            contexts,
+            recent_messages=recent_messages,
+            memory_summary=memory_summary,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate answer for conversation %s", req.conversationId)
+        raise HTTPException(status_code=502, detail="Unable to generate an answer right now") from exc
 
     usage = answer_result.usage if isinstance(answer_result.usage, dict) else {}
     estimated_cost = estimate_cost(usage)
@@ -1447,6 +2047,8 @@ def ask(req: AskRequest, request: Request):
 
     payload = {
         "answer": answer_result.text,
+        "followUpQuestions": extract_follow_up_questions(answer_result.text),
+        "promptStarters": build_prompt_starters(user_identity),
         "usage": usage,
         "estimatedCostUsd": estimated_cost,
     }

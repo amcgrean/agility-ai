@@ -6,6 +6,7 @@ Contents:
 - `server.py`: FastAPI app, chat persistence, engagement logging, per-user conversation scoping, and training-consent/export endpoints
 - `providers.py`: OpenAI-backed answer formatting and auto-title generation
 - `cleanup_non_user_conversations.py`: one-off cleanup script used to remove legacy local/test chat data
+- `scripts/ingest_agility_docs.py`: normalizes local HTML, PDF, and DOCX sources into chunk-ready JSONL outputs
 
 The frontend lives in `src/` and is built with Vite. The Pi serves the built static frontend from `ui/` using the backend above.
 
@@ -92,3 +93,164 @@ That layout lets the Pi track `origin/main` cleanly while preserving secrets, in
 - Max context size: `MAX_CONTEXT_CHARS=9000`
 - Cache strategy: `REQUEST_CACHE_TTL_SECONDS=300`
 - Follow-up memory: `MAX_RECENT_MESSAGES=6`, `CONVERSATION_SUMMARY_TRIGGER_MESSAGES=12`
+
+## Local doc ingestion
+
+The repo now includes a production-leaning ingestion pipeline for mixed local source folders that contain:
+- scraped HTML portal pages
+- local PDFs
+- local DOCX guides
+- training/video wrapper pages exported from the portal
+
+The pipeline is:
+
+```text
+raw docs -> extract machine-readable text -> normalize/clean -> detect sections where available
+-> chunk into retrieval-ready units -> attach provenance metadata -> write JSONL outputs
+-> embed cleaned chunks -> build/update FAISS index
+```
+
+Example command:
+
+```bash
+python pi_backend/scripts/ingest_agility_docs.py --source-dir "C:\Users\indha\OneDrive - Beisser Lumber\Agility\wedge scrape" --out-dir "C:\Users\indha\python\agility ai\pi_backend\ingest_output\wedge_scrape"
+```
+
+Outputs:
+- `normalized_docs.jsonl`: cleaned document/page/section units with provenance
+- `doc_chunks.jsonl`: retrieval chunks with stable IDs and citation metadata
+- `mcp_resources.jsonl`: MCP-ready resource rows for the same chunks
+- `ingestion_manifest.json`: per-file processing status, hashes, dedupe signals, and counts
+
+Chunk metadata now includes:
+- `chunk_id`
+- `chunk_hash`
+- `doc_id`
+- `corpus_name`
+- `source_title`
+- `source_file`
+- `source_path`
+- `source_type`
+- `source_format`
+- `doc_type`
+- `content_domain`
+- `access_scope`
+- `ocr_applied`
+- `source_url`
+- `deep_link`
+- `section_title`
+- `page_start`
+- `page_end`
+- `last_processed_at`
+
+Design notes:
+- raw source files are never modified
+- machine-readable extraction is used first; OCR is only attempted when PDF text is nearly empty and OCR dependencies are installed
+- PDFs preserve page boundaries
+- HTML extraction prefers article detail content and falls back to training/video page layouts
+- repeated PDF margin lines are stripped when they look like headers/footers
+- standalone PDF page-number artifacts are stripped where practical
+- chunking is section-aware where source structure is available, with page/paragraph fallback
+- duplicate files are detected by file hash, and chunk-level duplicates are suppressed with `chunk_hash`
+- every record is tagged with `corpus_name`, `content_domain`, and `access_scope` so future internal/product/building corpora can be filtered without redesigning the schema
+
+Notes:
+- `.html`, `.pdf`, and `.docx` are processed now.
+- legacy `.doc`, `.dotx`, and `.pptx` files are skipped.
+- image-only or missing PDFs are reported in `ingestion_manifest.json` for follow-up.
+- re-runs can skip unchanged files with `--skip-unchanged`.
+
+Current known limitations:
+- OCR fallback requires `pytesseract`, `Pillow`, and a working `tesseract` binary on the machine
+- some PDF text still contains source encoding artifacts
+- deep links are best for HTML/training pages today; PDFs use `agility://...` resource URIs unless a source URL exists
+
+## Build the retrieval index
+
+Once `doc_chunks.jsonl` exists and `OPENAI_API_KEY` is available, build the backend retrieval files with:
+
+```bash
+python pi_backend/scripts/build_doc_index.py --chunks-file "C:\Users\indha\python\agility ai\pi_backend\ingest_output\wedge_scrape\doc_chunks.jsonl" --out-dir "C:\Users\indha\python\agility ai\pi_backend" --mcp-export-file "C:\Users\indha\python\agility ai\pi_backend\ingest_output\wedge_scrape\mcp_resources.jsonl"
+```
+
+Outputs:
+- `agility.index`: FAISS cosine-similarity index
+- `agility_meta.jsonl`: chunk metadata consumed by `server.py`, preserving the richer citation fields
+- `mcp_resources.jsonl`: MCP-friendly resource export for the same chunks
+
+## One-command refresh
+
+If you set these env vars:
+- `AGILITY_DOC_SOURCE_DIR`
+- `AGILITY_DOC_OUTPUT_DIR`
+- `AGILITY_DOC_CHUNKS_FILE` (optional if using the default output path)
+- `AGILITY_MCP_EXPORT_FILE` (optional)
+
+you can refresh the pipeline with:
+
+```bash
+python pi_backend/scripts/refresh_agility_docs.py
+```
+
+or skip unchanged files during repeat batch loads:
+
+```bash
+python pi_backend/scripts/refresh_agility_docs.py --skip-unchanged
+```
+
+Behavior:
+- always reruns ingestion
+- supports manifest-based change detection with `--skip-unchanged`
+- builds the FAISS index only when both `faiss` and `OPENAI_API_KEY` are available
+- safely stops after ingestion otherwise
+
+## MCP server
+
+The repo now includes a simple MCP server over the exported corpora:
+
+```bash
+python pi_backend/scripts/agility_mcp_server.py --transport stdio
+```
+
+It reads `AGILITY_MCP_EXPORT_FILE` when set, or falls back to `pi_backend/ingest_output/*/mcp_resources.jsonl`.
+
+Current MCP capabilities:
+- `search_docs`: keyword-weighted search across all exported corpora
+- `get_doc_chunk`: fetch a specific `agility://docs/.../chunk/...` record
+- `list_doc_chunks`: browse all chunk URIs for a document
+- `corpus_stats`: inspect loaded corpus coverage
+- resource reads for `agility://docs/{doc_id}/chunk/{chunk_id}`
+
+This is designed so future internal, product, and building-doc corpora can be added just by generating more `mcp_resources.jsonl` files and pointing the server at them.
+
+Search filters now support:
+- `corpus_name`
+- `content_domain`
+- `access_scope`
+- `source_type`
+- `portal_section`
+
+## Admin reindexing
+
+The backend now supports admin-triggered retrieval refreshes:
+
+- `GET /admin/retrieval-status`
+- `POST /admin/reindex`
+
+Both endpoints require the same bearer token used by `ADMIN_EXPORT_TOKEN`.
+
+Example payload for `POST /admin/reindex`:
+
+```json
+{
+  "sourceDir": "C:\\Users\\indha\\OneDrive - Beisser Lumber\\Agility\\wedge scrape",
+  "outputDir": "C:\\Users\\indha\\python\\agility ai\\pi_backend\\ingest_output\\wedge_scrape_v4",
+  "corpusName": "wedge_scrape",
+  "skipUnchanged": true
+}
+```
+
+Useful flags:
+- `reloadOnly`: reload `agility.index` and `agility_meta.jsonl` without running ingestion
+- `skipIndex`: rerun ingestion only
+- `skipUnchanged`: avoid reprocessing files whose hash matches the previous manifest

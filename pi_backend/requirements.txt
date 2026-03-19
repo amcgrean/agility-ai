@@ -4,3 +4,10 @@ openai
 faiss-cpu
 numpy
 python-dotenv
+python-multipart
+beautifulsoup4
+PyMuPDF
+mcp
+pillow
+pytesseract
+rapidocr-onnxruntime

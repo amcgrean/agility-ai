@@ -4,3 +4,10 @@ dist/
 .env.*
 __pycache__/
 pi_backend/__pycache__/
+pi_backend/agility.index
+pi_backend/agility_meta.jsonl
+pi_backend/agility_ai.db
+pi_backend/agility_cache.db
+pi_backend/agility_cache.db-shm
+pi_backend/agility_cache.db-wal
+pi_backend/ingest_output/
