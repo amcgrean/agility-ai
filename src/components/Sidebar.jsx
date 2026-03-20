@@ -196,46 +196,55 @@ export default function Sidebar({
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex h-dvh flex-col border-r border-slate-700 bg-slate-900/95 p-3 text-slate-100 shadow-2xl shadow-slate-950/40 transition-transform duration-200 md:static md:z-auto md:h-auto md:translate-x-0 md:bg-slate-900/80 md:shadow-none ${
+        className={`fixed inset-y-0 left-0 z-40 flex h-dvh flex-col border-r border-slate-700 bg-slate-900/95 p-3 text-slate-100 shadow-2xl shadow-slate-950/40 transition-transform duration-200 md:static md:z-auto md:h-auto md:min-h-screen md:translate-x-0 md:bg-slate-900/85 md:shadow-none ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         } ${collapsed ? 'md:w-16' : 'md:w-80'} w-[min(21rem,calc(100vw-2rem))]`}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <button onClick={onToggle} className="rounded-md p-2 hover:bg-slate-800" aria-label="Toggle sidebar">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <button
+            onClick={onToggle}
+            className="hidden rounded-md p-2 hover:bg-slate-800 md:inline-flex"
+            aria-label="Toggle sidebar"
+          >
             {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
-          {!collapsed ? (
-            <div className="flex items-center gap-2">
-              <button
-                className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
-                onClick={async () => {
-                  const nextTitle = window.prompt('Folder name');
-                  if (nextTitle?.trim()) await onCreateFolder(nextTitle.trim());
-                }}
-              >
-                <FolderPlus size={16} /> Folder
-              </button>
-              <button
-                className="flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-2 text-sm text-white hover:bg-emerald-600"
-                onClick={() => {
-                  onCreate();
-                  onCloseMobile?.();
-                }}
-              >
-                <Plus size={16} /> New chat
-              </button>
-            </div>
-          ) : null}
+          <div className="flex flex-1 items-center justify-between gap-2 md:justify-end">
+            <p className={`text-sm font-semibold text-slate-300 md:hidden ${collapsed ? 'sr-only' : ''}`}>
+              Conversations
+            </p>
+            {!collapsed && (
+              <div className="flex items-center gap-2">
+                <button
+                  className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+                  onClick={async () => {
+                    const nextTitle = window.prompt('Folder name');
+                    if (nextTitle?.trim()) await onCreateFolder(nextTitle.trim());
+                  }}
+                >
+                  <FolderPlus size={16} /> Folder
+                </button>
+                <button
+                  className="flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-2 text-sm text-white transition hover:bg-emerald-600"
+                  onClick={() => {
+                    onCreate();
+                    onCloseMobile?.();
+                  }}
+                >
+                  <Plus size={16} /> New chat
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {!collapsed ? (
+        {!collapsed && (
           <div className="space-y-4 overflow-y-auto pr-1">
-            {grouped.byFolder.map((items) => (
+            {grouped.byFolder.map((group) => (
               <FolderSection
-                key={items.folder.id}
-                label={items.folder.title}
-                items={items.items}
-                folderMeta={items.folder}
+                key={group.folder.id}
+                label={group.folder.title}
+                items={group.items}
+                folderMeta={group.folder}
                 folders={folders}
                 activeConversationId={activeConversationId}
                 editing={editing}
@@ -270,7 +279,7 @@ export default function Sidebar({
               onDeleteFolder={onDeleteFolder}
             />
           </div>
-        ) : null}
+        )}
       </aside>
     </>
   );

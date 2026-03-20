@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -68,7 +68,47 @@ function extractSuggestions(content = '') {
   return { body, suggestions };
 }
 
-export default function ChatMessage({
+function splitMarkdownIntoBlocks(content = '') {
+  const blocks = [];
+  const regex = /```[\s\S]*?```|(?:^|\n)(#{1,6}\s.*)|(?:^|\n)([-*]\s.*)|(?:^|\n)(\d+\.\s.*)|(?:^|\n)(>.*)|(?:^|\n)([^#\n][^\n]*(?:\n(?!\n|#|[-*]\s|\d+\.\s|>).+)*)/gm;
+  const matches = content.match(regex);
+  if (!matches) return [];
+  for (const rawBlock of matches) {
+    const block = rawBlock.trim();
+    if (block) blocks.push(block);
+  }
+  return blocks;
+}
+
+const markdownComponents = {
+  code(props) {
+    const { children, className, inline } = props;
+    return inline ? (
+      <code className="rounded bg-slate-700 px-1 py-0.5">{children}</code>
+    ) : (
+      <CodeBlock className={className}>{children}</CodeBlock>
+    );
+  },
+};
+
+const MarkdownBlock = memo(function MarkdownBlock({ block, isUser }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeHighlight]}
+      components={markdownComponents}
+      className={
+        isUser
+          ? 'space-y-3 whitespace-pre-wrap break-words text-[15px] leading-7'
+          : 'space-y-4 break-words text-sm leading-7 sm:text-[15px] [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-semibold sm:[&_h1]:text-2xl [&_h2]:mb-3 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:border-slate-700 [&_h2]:pb-2 [&_h2]:text-lg [&_h2]:font-semibold sm:[&_h2]:text-xl [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-5 sm:[&_ul]:pl-6 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-2 [&_ol]:pl-5 sm:[&_ol]:pl-6 [&_li]:my-1 [&_strong]:font-semibold [&_blockquote]:my-4 [&_blockquote]:rounded-r-lg [&_blockquote]:border-l-2 [&_blockquote]:border-slate-500 [&_blockquote]:bg-slate-900/30 [&_blockquote]:pl-4 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:text-slate-300 [&_table]:my-4 [&_table]:block [&_table]:overflow-x-auto sm:[&_table]:table sm:[&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-slate-600 [&_th]:bg-slate-700 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-slate-700 [&_td]:px-3 [&_td]:py-2 [&_a]:font-medium [&_a]:text-emerald-300 [&_a]:underline'
+      }
+    >
+      {block}
+    </ReactMarkdown>
+  );
+});
+
+function ChatMessage({
   message,
   onSuggestionClick,
   onMessageLike,
@@ -79,6 +119,7 @@ export default function ChatMessage({
 }) {
   const isUser = message.role === 'user';
   const { body, suggestions } = useMemo(() => extractSuggestions(message.content), [message.content]);
+  const markdownBlocks = useMemo(() => splitMarkdownIntoBlocks(body), [body]);
   const showTyping = message.streaming && !body;
   const [messageFeedback, setMessageFeedback] = useState(null);
   const [suggestionFeedback, setSuggestionFeedback] = useState({});
@@ -164,27 +205,18 @@ export default function ChatMessage({
       {showTyping ? (
         <TypingIndicator />
       ) : (
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={{
-            code(props) {
-              const { children, className, inline } = props;
-              return inline ? (
-                <code className="rounded bg-slate-700 px-1 py-0.5">{children}</code>
-              ) : (
-                <CodeBlock className={className}>{children}</CodeBlock>
-              );
-            },
-          }}
-          className={
-            isUser
-              ? 'space-y-3 whitespace-pre-wrap break-words text-[15px] leading-7'
-              : 'space-y-4 break-words text-sm leading-7 sm:text-[15px] [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-semibold sm:[&_h1]:text-2xl [&_h2]:mb-3 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:border-slate-700 [&_h2]:pb-2 [&_h2]:text-lg [&_h2]:font-semibold sm:[&_h2]:text-xl [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-5 sm:[&_ul]:pl-6 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-2 [&_ol]:pl-5 sm:[&_ol]:pl-6 [&_li]:my-1 [&_strong]:font-semibold [&_blockquote]:my-4 [&_blockquote]:rounded-r-lg [&_blockquote]:border-l-2 [&_blockquote]:border-slate-500 [&_blockquote]:bg-slate-900/30 [&_blockquote]:pl-4 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:text-slate-300 [&_table]:my-4 [&_table]:block [&_table]:overflow-x-auto sm:[&_table]:table sm:[&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-slate-600 [&_th]:bg-slate-700 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-slate-700 [&_td]:px-3 [&_td]:py-2 [&_a]:font-medium [&_a]:text-emerald-300 [&_a]:underline'
-          }
-        >
-          {body || (message.streaming ? 'Generating response...' : '')}
-        </ReactMarkdown>
+        <div className="space-y-3">
+          {markdownBlocks.length > 0 ? (
+            markdownBlocks.map((block, idx) => (
+              <MarkdownBlock key={`${idx}-${block.slice(0, 32)}`} block={block} isUser={isUser} />
+            ))
+          ) : (
+            <MarkdownBlock
+              block={body || (message.streaming ? 'Generating response...' : '')}
+              isUser={isUser}
+            />
+          )}
+        </div>
       )}
 
       {!isUser && suggestions.length > 0 ? (
@@ -314,3 +346,5 @@ export default function ChatMessage({
     </article>
   );
 }
+
+export default memo(ChatMessage);
