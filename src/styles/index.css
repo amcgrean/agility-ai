@@ -2,10 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: light;
+}
+
+html {
+  background-color: #f1f5f9;
+}
+
+html.dark {
+  color-scheme: dark;
+  background-color: #020617;
+}
+
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   min-width: 320px;
+  background-color: inherit;
 }
 
 #root {

@@ -169,7 +169,7 @@ export default function ChatPage() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
       />
 
-      <section className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <section className="flex min-h-screen min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar
           darkMode={darkMode}
           onToggleTheme={() => setDarkMode((prev) => !prev)}
@@ -180,32 +180,38 @@ export default function ChatPage() {
           onOpenSidebar={() => setMobileSidebarOpen(true)}
         />
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-3 sm:p-4 md:p-6">
-          {messages.length === 0 ? (
-            <p className="text-sm opacity-70">Start a conversation by asking a question.</p>
-          ) : (
-            messages.map((message) => (
-              <ChatMessage
-                key={message.id}
-                message={message}
-                onSuggestionClick={handleSuggestionClick}
-                onMessageLike={handleMessageLike}
-                onMessageDislike={handleMessageDislike}
-                onMessageCorrection={handleMessageCorrection}
-                onSuggestionLike={handleSuggestionLike}
-                onSuggestionDislike={handleSuggestionDislike}
-              />
-            ))
-          )}
-        </div>
+        <div className="mx-auto flex w-full max-w-5xl flex-1 min-w-0 flex-col px-3 pb-3 sm:px-4 sm:pb-4 md:px-6 md:pb-6">
+          <div className="flex-1 overflow-y-auto pt-3 sm:pt-4 md:pt-6">
+            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4 md:pb-6">
+              {messages.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300 sm:px-6">
+                  Start a conversation by asking a question.
+                </div>
+              ) : (
+                messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    onSuggestionClick={handleSuggestionClick}
+                    onMessageLike={handleMessageLike}
+                    onMessageDislike={handleMessageDislike}
+                    onMessageCorrection={handleMessageCorrection}
+                    onSuggestionLike={handleSuggestionLike}
+                    onSuggestionDislike={handleSuggestionDislike}
+                  />
+                ))
+              )}
+            </div>
+          </div>
 
-        <MessageInput
-          onSend={sendMessage}
-          disabled={isLoading}
-          value={draft}
-          onChange={setDraft}
-          inputRef={inputRef}
-        />
+          <MessageInput
+            onSend={sendMessage}
+            disabled={isLoading}
+            value={draft}
+            onChange={setDraft}
+            inputRef={inputRef}
+          />
+        </div>
       </section>
     </main>
   );
