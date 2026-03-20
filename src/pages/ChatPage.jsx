@@ -178,7 +178,7 @@ export default function ChatPage() {
   }, [activeConversationId]);
 
   return (
-    <main className="flex min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <main className="flex h-dvh overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((prev) => !prev)}
@@ -197,7 +197,7 @@ export default function ChatPage() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
       />
 
-      <section className="flex min-h-screen min-w-0 flex-1 flex-col overflow-hidden">
+      <section className="flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar
           darkMode={darkMode}
           onToggleTheme={() => setDarkMode((prev) => !prev)}
