@@ -39,7 +39,7 @@ function TypingIndicator() {
           <span className="h-2 w-2 animate-bounce rounded-full bg-emerald-300 [animation-delay:-0.1s]" />
           <span className="h-2 w-2 animate-bounce rounded-full bg-emerald-300" />
         </span>
-        Agility AI is drafting a response
+        Beisser AI is drafting a response
       </div>
       <div className="space-y-2">
         <div className="h-3 w-11/12 animate-pulse rounded-full bg-slate-700" />
@@ -278,7 +278,7 @@ export default function ChatMessage({
           </p>
           <textarea
             className="mt-3 min-h-28 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
-            placeholder="Write the better answer you want Agility AI to learn from."
+            placeholder="Write the better answer you want Beisser AI to learn from."
             value={correctedAnswer}
             onChange={(event) => setCorrectedAnswer(event.target.value)}
           />

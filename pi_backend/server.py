@@ -803,10 +803,10 @@ def ui_index_response():
         """
 <html>
 <head>
-<title>Agility Assistant</title>
+<title>Beisser AI Assistant</title>
 </head>
 <body style="font-family:Arial;max-width:900px;margin:40px auto;">
-<h2>Agility Documentation Assistant</h2>
+<h2>Beisser AI Assistant</h2>
 <p>UI bundle not found. Build the frontend and point <code>AGILITY_UI_DIR</code> at the output directory.</p>
 </body>
 </html>

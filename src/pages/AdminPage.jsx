@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { conversationService } from '../services/api';
 
-const TOKEN_STORAGE_KEY = 'agility-ai-admin-token';
+const TOKEN_STORAGE_KEY = 'beisser-ai-admin-token';
 
 function formatCurrency(value) {
   return new Intl.NumberFormat('en-US', {

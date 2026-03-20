@@ -11,14 +11,20 @@ import { useChat } from '../hooks/useChat';
 export default function ChatPage() {
   const {
     conversations,
+    folders,
+    promptStarters,
     activeConversation,
     activeConversationId,
     setActiveConversationId,
     draft,
     setDraft,
     newConversation,
+    moveConversation,
     renameConversation,
     deleteConversation,
+    createFolder,
+    renameFolder,
+    deleteFolder,
     sendMessage,
     isLoading,
   } = useChat();
@@ -62,6 +68,9 @@ export default function ChatPage() {
   }, []);
 
   const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
+  const starterCards = promptStarters?.starters || [];
+  const trendingQuestions = promptStarters?.trendingQuestions || [];
+  const relatedTopics = promptStarters?.relatedTopics || [];
 
   function exportPdf() {
     if (!activeConversation) return;
@@ -122,6 +131,20 @@ export default function ChatPage() {
     });
   }
 
+  async function handlePromptStarterClick(label, source) {
+    setDraft(label);
+    inputRef.current?.focus();
+
+    await conversationService.trackEngagement({
+      eventType: 'prompt_starter_selected',
+      conversationId: activeConversationId,
+      label,
+      metadata: {
+        source,
+      },
+    });
+  }
+
   async function handleMessageCorrection(message, correctedAnswer, notes) {
     if (!activeConversationId) {
       throw new Error('Select a conversation before submitting a correction.');
@@ -160,11 +183,16 @@ export default function ChatPage() {
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((prev) => !prev)}
         conversations={conversations}
+        folders={folders}
         activeConversationId={activeConversationId}
         onSelect={setActiveConversationId}
         onCreate={newConversation}
         onRename={renameConversation}
         onDelete={deleteConversation}
+        onMoveConversation={moveConversation}
+        onCreateFolder={createFolder}
+        onRenameFolder={renameFolder}
+        onDeleteFolder={deleteFolder}
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
       />
@@ -182,7 +210,72 @@ export default function ChatPage() {
 
         <div className="flex-1 space-y-4 overflow-y-auto p-3 sm:p-4 md:p-6">
           {messages.length === 0 ? (
-            <p className="text-sm opacity-70">Start a conversation by asking a question.</p>
+            <section className="mx-auto max-w-4xl space-y-6">
+              <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300">Chat workflow ready</p>
+                <h2 className="mt-3 text-2xl font-semibold text-white">Start with a prompt, trend, or related topic</h2>
+                <p className="mt-2 max-w-2xl text-sm text-slate-400">
+                  Beisser AI now tracks question trends, follow-up selections, thumbs feedback, and explicit answer corrections.
+                </p>
+                {starterCards.length > 0 ? (
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    {starterCards.map((item) => (
+                      <button
+                        key={`${item.source}-${item.label}`}
+                        type="button"
+                        onClick={() => handlePromptStarterClick(item.label, item.source)}
+                        className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100 transition hover:border-emerald-400 hover:bg-emerald-500/20"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Trending Questions</p>
+                  <div className="mt-4 space-y-3">
+                    {trendingQuestions.length > 0 ? (
+                      trendingQuestions.map((item) => (
+                        <button
+                          key={`${item.label}-${item.lastAskedAt}`}
+                          type="button"
+                          onClick={() => handlePromptStarterClick(item.label, 'trending_question')}
+                          className="block w-full rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-left transition hover:border-emerald-500/40"
+                        >
+                          <p className="text-sm font-medium text-white">{item.label}</p>
+                          <p className="mt-1 text-xs text-slate-400">{item.count} asks in the last 30 days</p>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-400">Trending questions will appear once people start asking repeat questions.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Related Topics</p>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {relatedTopics.length > 0 ? (
+                      relatedTopics.map((item) => (
+                        <button
+                          key={`${item.label}-${item.lastUsedAt}`}
+                          type="button"
+                          onClick={() => handlePromptStarterClick(item.label, item.source)}
+                          className="rounded-full border border-slate-700 bg-slate-950/70 px-4 py-2 text-sm text-slate-200 transition hover:border-emerald-500/40 hover:text-emerald-200"
+                        >
+                          {item.label}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-400">Related topics will populate from the follow-up questions people actually choose.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
           ) : (
             messages.map((message) => (
               <ChatMessage
@@ -205,6 +298,7 @@ export default function ChatPage() {
           value={draft}
           onChange={setDraft}
           inputRef={inputRef}
+          onUploadImage={(file) => conversationService.uploadImage(file, activeConversationId)}
         />
       </section>
     </main>
