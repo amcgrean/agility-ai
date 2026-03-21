@@ -208,8 +208,8 @@ export default function ChatPage() {
           onOpenSidebar={() => setMobileSidebarOpen(true)}
         />
 
-        <div className="mx-auto flex w-full max-w-5xl flex-1 min-w-0 flex-col px-3 pb-3 sm:px-4 sm:pb-4 md:px-6 md:pb-6">
-          <div className="flex-1 overflow-y-auto pt-3 sm:pt-4 md:pt-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-1 min-h-0 flex-col px-3 pb-3 sm:px-4 sm:pb-4 md:px-6 md:pb-6">
+          <div className="flex-1 min-h-0 overflow-y-auto pt-3 sm:pt-4 md:pt-6">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4 md:pb-6">
               {messages.length === 0 ? (
                 <section className="space-y-6">
