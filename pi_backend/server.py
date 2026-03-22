@@ -17,6 +17,7 @@ import faiss
 import numpy as np
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -122,6 +123,22 @@ def ensure_retrieval_ready() -> None:
             raise HTTPException(status_code=503, detail="Retrieval index is not ready")
 
 app = FastAPI()
+
+# CORS — allow the Teams bot service (same host or configurable origins) to
+# call /ask and other JSON endpoints.  Set CORS_ALLOW_ORIGINS in the env file
+# to a comma-separated list of permitted origins, or "*" for fully open access
+# (only appropriate if the Pi is on a private network).
+_cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "")
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-User-Identity"],
+        allow_credentials=True,
+    )
+
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 if (UI_DIR / "assets").exists():

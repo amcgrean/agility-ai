@@ -1,0 +1,35 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "REPLACE_WITH_A_NEW_UUID",
+  "developer": {
+    "name": "Beisser Lumber / DMSI",
+    "websiteUrl": "https://REPLACE_WITH_YOUR_DOMAIN",
+    "privacyUrl": "https://REPLACE_WITH_YOUR_DOMAIN/privacy",
+    "termsOfUseUrl": "https://REPLACE_WITH_YOUR_DOMAIN/terms"
+  },
+  "name": {
+    "short": "Beisser AI",
+    "full": "Beisser AI – Agility Knowledge Assistant"
+  },
+  "description": {
+    "short": "Ask about Agility ERP and Beisser operations.",
+    "full": "Beisser AI answers questions about Agility ERP, lumber operations, sales procedures, and company policies using an internal document corpus. Requires Microsoft 365 Copilot."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1B4F72",
+  "copilotAgents": {
+    "declarativeAgents": [
+      {
+        "id": "beisser_ai_agent",
+        "file": "declarativeAgent.json"
+      }
+    ]
+  },
+  "permissions": ["identity"],
+  "validDomains": ["REPLACE_WITH_YOUR_PUBLIC_API_DOMAIN"]
+}

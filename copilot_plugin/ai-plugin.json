@@ -1,0 +1,17 @@
+{
+  "schema_version": "v2",
+  "name_for_human": "Beisser AI",
+  "name_for_model": "beisser_ai",
+  "description_for_human": "Ask questions about Agility ERP, lumber operations, sales procedures, and company policies.",
+  "description_for_model": "Use this plugin when the user asks questions about Agility ERP software, Beisser Lumber operations, sales orders, invoices, delivery workflows, company procedures, or any internal documentation topic. Call askQuestion with the user's question. Do not call this plugin for general knowledge questions unrelated to Agility or Beisser operations.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://REPLACE_WITH_YOUR_PUBLIC_API_URL/openapi.yaml"
+  },
+  "logo_url": "https://REPLACE_WITH_YOUR_PUBLIC_API_URL/static/logo.png",
+  "contact_email": "REPLACE_WITH_ADMIN_EMAIL",
+  "legal_info_url": "https://REPLACE_WITH_YOUR_DOMAIN/terms"
+}

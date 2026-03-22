@@ -1,0 +1,50 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "REPLACE_WITH_YOUR_AZURE_BOT_APP_ID",
+  "developer": {
+    "name": "Beisser Lumber / DMSI",
+    "websiteUrl": "https://REPLACE_WITH_YOUR_DOMAIN",
+    "privacyUrl": "https://REPLACE_WITH_YOUR_DOMAIN/privacy",
+    "termsOfUseUrl": "https://REPLACE_WITH_YOUR_DOMAIN/terms"
+  },
+  "name": {
+    "short": "Beisser AI",
+    "full": "Beisser AI – Agility Knowledge Assistant"
+  },
+  "description": {
+    "short": "Ask questions about Agility software and operations.",
+    "full": "Beisser AI answers questions about Agility ERP, lumber operations, sales procedures, and company policies using an indexed document corpus. Powered by OpenAI and a private FAISS retrieval index."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1B4F72",
+  "bots": [
+    {
+      "botId": "REPLACE_WITH_YOUR_AZURE_BOT_APP_ID",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "Help",
+              "description": "Show help and example questions"
+            },
+            {
+              "title": "Ask",
+              "description": "Ask a question — e.g. Ask how do I create a sales order?"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["REPLACE_WITH_YOUR_DOMAIN"]
+}

@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Beisser AI – Agility Knowledge API
+  description: >
+    Answers questions about Agility ERP, lumber operations, sales procedures,
+    and company policies by retrieving relevant content from an indexed
+    document corpus and generating a grounded response.
+  version: "1.0.0"
+servers:
+  - url: https://REPLACE_WITH_YOUR_PUBLIC_API_URL
+    description: Production server (Pi 5 via reverse proxy / tunnel)
+
+paths:
+  /ask:
+    post:
+      operationId: askQuestion
+      summary: Ask a question about Agility or Beisser operations
+      description: >
+        Accepts a natural-language question, retrieves the most relevant
+        document chunks from the FAISS index, and returns a grounded answer
+        along with optional follow-up questions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+            examples:
+              sales_order:
+                summary: Sales order question
+                value:
+                  question: How do I create a sales order in Agility?
+              delivery:
+                summary: Delivery photo question
+                value:
+                  question: How do I view delivery photos from a sales order?
+      responses:
+        "200":
+          description: Successful answer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          description: Bad request (e.g. empty question)
+        "502":
+          description: Upstream retrieval or LLM failure
+        "503":
+          description: Index not ready
+
+components:
+  schemas:
+    AskRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          maxLength: 4000
+          description: The natural-language question to answer
+          example: How do I void an invoice in Agility?
+        conversationId:
+          type: string
+          nullable: true
+          description: >
+            Optional ID of an existing conversation for multi-turn context.
+            Omit for single-turn queries (typical for Copilot plugin use).
+
+    AskResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+          description: The grounded answer based on retrieved document chunks
+        followUpQuestions:
+          type: array
+          items:
+            type: string
+          description: Up to 3 suggested follow-up questions
+          example:
+            - How do I apply a credit memo?
+            - Where can I see the invoice history?
+        usage:
+          type: object
+          description: Token usage for cost tracking (informational)
+          properties:
+            input_tokens:
+              type: integer
+            output_tokens:
+              type: integer
+        estimatedCostUsd:
+          type: number
+          format: float
+          description: Estimated OpenAI API cost in USD
