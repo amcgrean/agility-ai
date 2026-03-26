@@ -860,6 +860,9 @@ def check_export_token(request: Request) -> None:
 
 
 def check_admin_token(request: Request) -> None:
+    user_identity = resolve_user_identity(request)
+    if user_identity and user_identity.lower() in EXPERT_USER_IDENTITIES:
+        return
     check_export_token(request)
 
 

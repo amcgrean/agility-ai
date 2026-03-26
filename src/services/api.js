@@ -156,11 +156,9 @@ export const conversationService = {
     });
   },
 
-  async getAdminMetrics(token) {
+  async getAdminMetrics(token = '') {
     return request('/admin/metrics', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   },
 

@@ -33,19 +33,15 @@ export default function AdminPage() {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isExpert, setIsExpert] = useState(false);
 
   async function loadMetrics(activeToken) {
-    if (!activeToken) {
-      setMetrics(null);
-      return;
-    }
-
     setLoading(true);
     setError('');
     try {
       const data = await conversationService.getAdminMetrics(activeToken);
       setMetrics(data);
-      localStorage.setItem(TOKEN_STORAGE_KEY, activeToken);
+      if (activeToken) localStorage.setItem(TOKEN_STORAGE_KEY, activeToken);
     } catch (err) {
       setMetrics(null);
       setError(err.message || 'Unable to load admin metrics');
@@ -55,10 +51,18 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    if (token) {
-      loadMetrics(token);
+    async function init() {
+      const user = await conversationService.currentUser();
+      if (user?.canSubmitCorrections) {
+        setIsExpert(true);
+        loadMetrics('');
+      } else if (token) {
+        loadMetrics(token);
+      }
     }
-  }, [token]);
+    init();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const usageSummary = useMemo(() => metrics?.overview || {}, [metrics]);
 
@@ -80,34 +84,40 @@ export default function AdminPage() {
         </div>
 
         <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-          <label className="block text-sm font-medium text-slate-200">Admin token</label>
-          <div className="mt-3 flex flex-col gap-3 md:flex-row">
-            <input
-              className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none ring-0 placeholder:text-slate-500"
-              placeholder="Paste admin token"
-              value={draftToken}
-              onChange={(event) => setDraftToken(event.target.value)}
-              type="password"
-            />
-            <button
-              className="w-full rounded-xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-400 md:w-auto"
-              onClick={() => setToken(draftToken.trim())}
-            >
-              Load dashboard
-            </button>
-            <button
-              className="w-full rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 hover:bg-slate-800 md:w-auto"
-              onClick={() => {
-                localStorage.removeItem(TOKEN_STORAGE_KEY);
-                setDraftToken('');
-                setToken('');
-                setMetrics(null);
-                setError('');
-              }}
-            >
-              Clear token
-            </button>
-          </div>
+          {isExpert ? (
+            <p className="text-sm text-emerald-400">Signed in as admin — dashboard loaded automatically.</p>
+          ) : (
+            <>
+              <label className="block text-sm font-medium text-slate-200">Admin token</label>
+              <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                <input
+                  className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none ring-0 placeholder:text-slate-500"
+                  placeholder="Paste admin token"
+                  value={draftToken}
+                  onChange={(event) => setDraftToken(event.target.value)}
+                  type="password"
+                />
+                <button
+                  className="w-full rounded-xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-400 md:w-auto"
+                  onClick={() => { setToken(draftToken.trim()); loadMetrics(draftToken.trim()); }}
+                >
+                  Load dashboard
+                </button>
+                <button
+                  className="w-full rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 hover:bg-slate-800 md:w-auto"
+                  onClick={() => {
+                    localStorage.removeItem(TOKEN_STORAGE_KEY);
+                    setDraftToken('');
+                    setToken('');
+                    setMetrics(null);
+                    setError('');
+                  }}
+                >
+                  Clear token
+                </button>
+              </div>
+            </>
+          )}
           {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
           {metrics?.generatedAt ? <p className="mt-3 text-xs text-slate-500">Updated {metrics.generatedAt}</p> : null}
         </div>
