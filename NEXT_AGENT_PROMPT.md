@@ -1,137 +1,68 @@
-Follow-up implementation prompt for the `agility-ai` repo.
+# Beisser AI — Next Agent Handoff
 
-Current repo/workspace:
-- Repo path: `C:\Users\indha\python\agility ai`
-- Active backend work branch already pushed to GitHub:
-  - branch: `codex/ingestion-runtime-deploy`
-  - commit: `e9577b7b3f881cb7fb052c997cfcaa0e0bece54e`
-  - PR URL: `https://github.com/amcgrean/agility-ai/pull/new/codex/ingestion-runtime-deploy`
-- There are unrelated local frontend changes in `src/` that should not be reverted or mixed into backend work unless explicitly requested.
+**See `CLAUDE.md` for full project reference (auto-loaded by Claude Code).**
 
-Recent Updates & Achievements:
-- **App Rebranded to Beisser AI**: Fully renamed from "Agility AI" to "Beisser AI" across all UI, backend, and LLM persona.
-- **PWA Implementation**: Added a custom logo, `manifest.json`, and `sw.js`. Optimized for mobile using `h-dvh`.
-- **Independent Scrolling Fix**: Applied `min-h-0` to the flex hierarchy in `ChatPage.jsx` to allow the message list to scroll independently of the sticky sidebar and input.
-- **Codex Mobile Patch Merge**: Integrated "sticky chat input" and other mobile-first CSS tweaks.
-- **Deployment**: Synced to GitHub `main` and fully deployed to the Raspberry Pi.
+---
 
-What I Learned (Technical Notes):
-- **Flexbox Scrolling**: Use `min-h-0` on flex items that should scroll with `overflow-y-auto`.
-- **PWA Layout**: `h-dvh` prevents mobile browser chrome from jumping or hiding the app UI.
-- **Pi Sync**: If the Pi git state is "dirty", use `git reset --hard origin/main` to allow clean pulling.
+## Current State (as of 2026-03-26)
 
-Future Handover Tasks:
-- **OCR Improvements**: 3 mobile-app PDFs still fail to extract text via standard PyMuPDF. Monitor Tesseract status or try a cloud OCR if needed.
-- **PWA Enhancements**: Improve offline capabilities in `sw.js`.
-- **UI Tweaks**: Fine-tune the "Beisser AI" persona tone based on user feedback.
+### GitHub
+- Repo: `https://github.com/amcgrean/agility-ai`
+- Branch: `main`
+- Latest commit: `41d9703` — Auto-authenticate admin page for expert users
 
-What is already done:
-- A document ingestion pipeline now exists under `pi_backend/scripts/`:
-  - `ingest_agility_docs.py`
-  - `build_doc_index.py`
-  - `refresh_agility_docs.py`
-  - `doc_ingest_utils.py`
-  - `doc_ingest_extract.py`
-  - `doc_ingest_chunk.py`
-  - `agility_mcp_server.py`
-- The pipeline handles:
-  - HTML portal articles
-  - HTML training/video wrapper pages
-  - PDFs
-  - DOCX guides
-- Metadata now includes:
-  - `chunk_id`
-  - `chunk_hash`
-  - `doc_id`
-  - `corpus_name`
-  - `source_title`
-  - `source_file`
-  - `source_path`
-  - `source_type`
-  - `source_format`
-  - `doc_type`
-  - `content_domain`
-  - `access_scope`
-  - `ocr_applied`
-  - `source_url`
-  - `deep_link`
-  - `section_title`
-  - `page_start`
-  - `page_end`
-  - `last_processed_at`
-- The backend `server.py` now supports:
-  - safer retrieval artifact loading
-  - `GET /admin/retrieval-status`
-  - `POST /admin/reindex`
-- The MCP server can search and filter by:
-  - `corpus_name`
-  - `content_domain`
-  - `access_scope`
-  - `source_type`
-  - `portal_section`
+### Live Pi
+- Service: `agility-ai` — **active and healthy**
+- `GET /health` → `{ retrievalReady: true, chunkCount: 2319 }`
+- Reporting mode live and tested
+- Admin page auto-loads for `amcgrean@beisserlumber.com` without a token
 
-Live deployment status:
-- The Raspberry Pi is already updated with:
-  - the new `agility.index`
-  - the new `agility_meta.jsonl`
-  - the new backend code from `codex/ingestion-runtime-deploy`
-- Pi service:
-  - service name: `agility-ai`
-  - live data dir: `/home/amcgrean/agility-ai-data`
-  - checkout dir: `/home/amcgrean/agility-ai`
-  - env file: `/home/amcgrean/agility-ai-local/.env`
-- Verified on Pi:
-  - `/health` returns `retrievalReady: true`
-  - `/admin/retrieval-status` returns `2319` chunks
-  - `/ask` answers correctly from the new hosted Agility corpus
+---
 
-Latest ingestion baseline:
-- Output folder:
-  - `pi_backend/ingest_output/wedge_scrape_v5`
-- Current counts:
-  - `254` processed sources
-  - `1039` normalized records
-  - `2319` chunks
-  - `7` remaining errors
+## What Was Built This Session
 
-Remaining unresolved ingestion errors:
-1. `Mobile Apps/Agility Mobile Proof of Delivery POD.pdf`
-2. `Mobile Apps/Agility Sales - POD notifications on SO.pdf`
-3. `Mobile Apps/Agility Sales - View Delivery pics from SO.pdf`
-   - Current result: still `No extractable PDF text found`
-   - Tried:
-     - machine-readable PDF extraction
-     - `pytesseract` hook
-     - `rapidocr-onnxruntime` fallback
-   - Windows Tesseract installer did not complete in this environment
-2. Missing/unopenable password-policy PDFs referenced by the scrape corpus:
-   - `site/downloads/ar27482-password-policy-prohibition-of-compromised-passwords-2127d305.pdf`
-   - `site/downloads/ar27482-password-policy-prohibition-of-compromised-passwords-pdf-2127d305.html`
-   - `site/downloads/ar27485-hosted-password-policy-qa-ar2007-how-to-change-or-update-user-passwords--59f8a691.html`
-   - `site/downloads/ar27485-hosted-password-policy-qa-ar2007-how-to-change-or-update-user-passwords--59f8a691.pdf`
+### Reporting Expert Mode
+- New `/reporting` route and `ReportingPage.jsx` — AgilitySQL schema specialist
+- Blue-themed UI with SQL-focused prompt cards
+- Backend loads `pi_backend/ingest_output/agility_reporting_v1/chunks.jsonl` (14 chunks) at startup into `reporting_meta`
+- Mode is passed through the entire stack: frontend → `api.js` → `useChat.js` → `POST /ask` → `providers.py`
+- Separate prompt in `providers.py` with AgilitySQL join rules and alias conventions
 
-Important implementation notes:
-- Do not revert unrelated user changes in `src/`.
-- Generated artifacts are now ignored in `.gitignore`:
-  - `pi_backend/agility.index`
-  - `pi_backend/agility_meta.jsonl`
-  - `pi_backend/agility_ai.db`
-  - `pi_backend/agility_cache.db*`
-  - `pi_backend/ingest_output/`
-- If deploying code to Pi again, remember the Pi venv needed:
-  - `python-multipart`
-- If using the admin reindex endpoint on Pi, validate dependencies in `/home/amcgrean/agility-ai-local/.venv`.
+### Learning Feedback Loop
+- `get_relevant_corrections(question)` queries past corrections (Jaccard similarity > 0.2) and injects them into the LLM prompt as "Previous corrections"
+- Corrections stored in `engagement_events` table via `POST /feedback/corrections`
 
-Recommended next objective:
-- Start the next corpus as a separate ingest batch, likely internal docs.
-- Keep corpora separate by output folder and `corpus_name`, but searchable together at runtime.
+### Performance & Quality Fixes
+- Prompt starters cached in-memory (60s TTL) — was running 3 SQL queries on every `/ask`
+- Memory summary now refreshes every 6 messages after the first 12 (was only at multiples of 12)
+- `top_retrieval_score` now tracked in `ask_analytics` table
+- Cache key includes `mode` to prevent default/reporting answers bleeding into each other
+- All 14 reporting chunks sent to LLM (was arbitrarily capped at 8)
 
-Suggested next task:
-1. Ingest internal docs into a new corpus, for example:
-   - `pi_backend/ingest_output/internal_docs_v1`
-   - `--corpus-name internal_docs_v1`
-2. Rebuild the combined retrieval index.
-3. Verify retrieval filtering for `access_scope` before broader internal rollout.
-4. Optionally improve the stubborn OCR case for the 3 mobile-app PDFs if those documents are important.
+### UI Fixes
+- Auto-scroll to bottom on new messages (both ChatPage and ReportingPage)
+- Suggestion/follow-up clicks now fire immediately instead of populating draft
+- Follow-up questions now phrased as user questions ("How do I..."), not assistant offers ("Would you like me to...")
+- Sidebar navigation links (General Chat / Reporting Expert)
 
-If asked whether the live chatbot is already using the new scrape corpus, the answer is yes.
+### Admin Auth
+- Expert users (`EXPERT_USER_IDENTITIES`) bypass the Bearer token check on all `/admin/*` endpoints
+- AdminPage auto-detects expert users via `/users/me` and loads dashboard automatically
+
+### Service Worker
+- Bumped to `beisser-ai-v2` with `skipWaiting()` + `activate` cache cleanup
+- Future deploys: bump version string in `public/sw.js`
+
+---
+
+## Unresolved / Next Steps
+
+1. **Internal Docs Corpus** — Not yet ingested. Ingest into `pi_backend/ingest_output/internal_docs_v1` with `--corpus-name internal_docs_v1`. At runtime, load alongside existing corpora.
+
+2. **OCR for 3 Mobile App PDFs** — Still failing. Try Azure Document Intelligence or AWS Textract. Files are image-only scans with no text layer.
+
+3. **Training Export → Fine-tuning** — The export endpoint works (`GET /admin/training-export`), but there's no automated pipeline from export → fine-tuned model. This is the next step to make the learning loop complete.
+
+4. **Bundle splitting** — Vite warns about 944KB JS. Fine on LAN. If the app goes public, add dynamic imports for `AdminPage` and `ReportingPage`.
+
+5. **Reporting KB growth** — As more schema rules are added to the reporting skill, consider building a FAISS index for the reporting corpus instead of loading all chunks raw. Currently 14 chunks is fine.

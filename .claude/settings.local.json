@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh agility-ai-remote:*)",
+      "Bash(scp *agility-ai-remote:*)",
+      "Bash(npm run:*)",
+      "Bash(python -c:*)"
+    ]
+  }
+}
