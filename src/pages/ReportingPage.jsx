@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -8,11 +8,10 @@ import MessageInput from '../components/MessageInput';
 import { conversationService } from '../services/api';
 import { useChat } from '../hooks/useChat';
 
-export default function ChatPage() {
+export default function ReportingPage() {
   const {
     conversations,
     folders,
-    promptStarters,
     activeConversation,
     activeConversationId,
     setActiveConversationId,
@@ -74,10 +73,6 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const starterCards = promptStarters?.starters || [];
-  const trendingQuestions = promptStarters?.trendingQuestions || [];
-  const relatedTopics = promptStarters?.relatedTopics || [];
-
   const exportPdf = useCallback(() => {
     if (!activeConversation) return;
     const doc = new jsPDF();
@@ -86,7 +81,7 @@ export default function ChatPage() {
       .join('\n');
     const lines = doc.splitTextToSize(content || 'No messages', 180);
     doc.text(lines, 10, 10);
-    doc.save(`${activeConversation.title || 'conversation'}.pdf`);
+    doc.save(`${activeConversation.title || 'reporting-session'}.pdf`);
   }, [activeConversation, messages]);
 
   const shareConversation = useCallback(() => {
@@ -96,15 +91,19 @@ export default function ChatPage() {
     alert('Share link copied to clipboard.');
   }, [activeConversationId]);
 
+  const handleSendMessage = useCallback((text, attachments) => {
+    sendMessage(text, attachments, 'reporting');
+  }, [sendMessage]);
+
   const handleSuggestionClick = useCallback(async (suggestion, message) => {
     conversationService.trackEngagement({
       eventType: 'follow_up_selected',
       conversationId: activeConversationId,
       messageId: message.id,
       label: suggestion,
-      metadata: { source: 'assistant_related_questions' },
+      metadata: { source: 'reporting_related_questions', mode: 'reporting' },
     });
-    sendMessage(suggestion, []);
+    sendMessage(suggestion, [], 'reporting');
   }, [activeConversationId, sendMessage]);
 
   const handleMessageDislike = useCallback(async (message) => {
@@ -112,9 +111,10 @@ export default function ChatPage() {
       eventType: 'response_thumbed_down',
       conversationId: activeConversationId,
       messageId: message.id,
-      label: activeConversation?.title || 'assistant_response',
+      label: activeConversation?.title || 'reporting_response',
       metadata: {
-        source: 'assistant_message',
+        source: 'reporting_expert',
+        mode: 'reporting',
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
@@ -125,27 +125,14 @@ export default function ChatPage() {
       eventType: 'response_thumbed_up',
       conversationId: activeConversationId,
       messageId: message.id,
-      label: activeConversation?.title || 'assistant_response',
+      label: activeConversation?.title || 'reporting_response',
       metadata: {
-        source: 'assistant_message',
+        source: 'reporting_expert',
+        mode: 'reporting',
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
   }, [activeConversationId, activeConversation?.title]);
-
-  const handlePromptStarterClick = useCallback(async (label, source) => {
-    setDraft(label);
-    inputRef.current?.focus();
-
-    await conversationService.trackEngagement({
-      eventType: 'prompt_starter_selected',
-      conversationId: activeConversationId,
-      label,
-      metadata: {
-        source,
-      },
-    });
-  }, [activeConversationId, setDraft]);
 
   const handleMessageCorrection = useCallback(async (message, correctedAnswer, notes) => {
     if (!activeConversationId) {
@@ -155,29 +142,12 @@ export default function ChatPage() {
     return conversationService.submitCorrection(activeConversationId, message.id, correctedAnswer, notes);
   }, [activeConversationId]);
 
-  const handleSuggestionLike = useCallback(async (suggestion, message) => {
-    await conversationService.trackEngagement({
-      eventType: 'suggestion_thumbed_up',
-      conversationId: activeConversationId,
-      messageId: message.id,
-      label: suggestion,
-      metadata: {
-        source: 'assistant_related_questions',
-      },
-    });
-  }, [activeConversationId]);
-
-  const handleSuggestionDislike = useCallback(async (suggestion, message) => {
-    await conversationService.trackEngagement({
-      eventType: 'suggestion_thumbed_down',
-      conversationId: activeConversationId,
-      messageId: message.id,
-      label: suggestion,
-      metadata: {
-        source: 'assistant_related_questions',
-      },
-    });
-  }, [activeConversationId]);
+  const reportingPrompts = [
+    { label: "How do I join item activity to orders?", icon: "📊" },
+    { label: "What is the grain of the so_detail table?", icon: "🎯" },
+    { label: "Give me a template for a sales by customer report", icon: "📑" },
+    { label: "Show business key joins for shipments", icon: "🔗" }
+  ];
 
   return (
     <main className="flex h-dvh overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -215,69 +185,33 @@ export default function ChatPage() {
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4 md:pb-6">
               {messages.length === 0 ? (
                 <section className="space-y-6">
-                  <div className="rounded-3xl border border-slate-200/50 bg-white/70 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 sm:p-8">
-                    <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-600 dark:text-emerald-400">Chat workflow ready</p>
-                    <h2 className="mt-3 text-2xl font-semibold text-slate-900 dark:text-white sm:text-3xl">Start with a prompt, trend, or related topic</h2>
+                  <div className="rounded-3xl border border-blue-500/20 bg-blue-500/5 p-6 shadow-sm dark:border-blue-500/30 dark:bg-blue-900/10 sm:p-8">
+                    <p className="text-xs font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-400">Reporting Expert Mode</p>
+                    <h2 className="mt-3 text-2xl font-semibold text-slate-900 dark:text-white sm:text-3xl">SQL Schema & Reporting Specialist</h2>
                     <p className="mt-2 max-w-2xl text-sm text-slate-500 dark:text-slate-400 sm:text-base">
-                      Beisser AI now tracks question trends, follow-up selections, thumbs feedback, and explicit answer corrections.
+                      This specialized interface uses Agility Reporting best practices. Ask about table grains, business key joins, and SQL patterns for the AgilitySQL schema.
                     </p>
-                    {starterCards.length > 0 ? (
-                      <div className="mt-6 flex flex-wrap gap-3">
-                        {starterCards.map((item) => (
-                          <button
-                            key={`${item.source}-${item.label}`}
-                            type="button"
-                            onClick={() => handlePromptStarterClick(item.label, item.source)}
-                            className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-700 transition hover:border-emerald-400 hover:bg-emerald-500/20 dark:text-emerald-100"
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+                    <div className="mt-8 grid gap-4 sm:grid-cols-2">
+                       {reportingPrompts.map((prompt) => (
+                         <button
+                           key={prompt.label}
+                           onClick={() => setDraft(prompt.label)}
+                           className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-500/40 hover:bg-blue-50/50 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:bg-blue-900/20"
+                         >
+                           <span className="text-xl">{prompt.icon}</span>
+                           <span className="text-sm font-medium">{prompt.label}</span>
+                         </button>
+                       ))}
+                    </div>
                   </div>
-
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200/50 bg-white/70 p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
-                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Trending Questions</p>
-                      <div className="mt-4 space-y-3">
-                        {trendingQuestions.length > 0 ? (
-                          trendingQuestions.map((item) => (
-                            <button
-                              key={`${item.label}-${item.lastAskedAt}`}
-                              type="button"
-                              onClick={() => handlePromptStarterClick(item.label, 'trending_question')}
-                              className="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-emerald-500/40 dark:border-slate-800 dark:bg-slate-950/60"
-                            >
-                              <p className="text-sm font-medium text-slate-900 dark:text-white">{item.label}</p>
-                              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.count} asks in the last 30 days</p>
-                            </button>
-                          ))
-                        ) : (
-                          <p className="text-sm text-slate-500 dark:text-slate-400">Trending questions will appear once people start asking repeat questions.</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200/50 bg-white/70 p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
-                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Related Topics</p>
-                      <div className="mt-4 flex flex-wrap gap-3">
-                        {relatedTopics.length > 0 ? (
-                          relatedTopics.map((item) => (
-                            <button
-                              key={`${item.label}-${item.lastUsedAt}`}
-                              type="button"
-                              onClick={() => handlePromptStarterClick(item.label, item.source)}
-                              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 transition hover:border-emerald-500/40 hover:text-emerald-200 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-200"
-                            >
-                              {item.label}
-                            </button>
-                          ))
-                        ) : (
-                          <p className="text-sm text-slate-500 dark:text-slate-400">Related topics will populate from the follow-up questions people actually choose.</p>
-                        )}
-                      </div>
-                    </div>
+                  
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 dark:border-amber-500/30 dark:bg-amber-900/10">
+                    <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-400">⚠️ Reporting Rules</h3>
+                    <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                      <li>Never join on <code>prrowid</code>; always use business keys.</li>
+                      <li>Be mindful of the grain (header vs detail).</li>
+                      <li>Tables like <code>item_activity</code> need date filters for performance.</li>
+                    </ul>
                   </div>
                 </section>
               ) : (
@@ -289,8 +223,6 @@ export default function ChatPage() {
                     onMessageLike={handleMessageLike}
                     onMessageDislike={handleMessageDislike}
                     onMessageCorrection={handleMessageCorrection}
-                    onSuggestionLike={handleSuggestionLike}
-                    onSuggestionDislike={handleSuggestionDislike}
                   />
                 ))
               )}
@@ -299,7 +231,7 @@ export default function ChatPage() {
           </div>
 
           <MessageInput
-            onSend={sendMessage}
+            onSend={handleSendMessage}
             disabled={isLoading}
             value={draft}
             onChange={setDraft}

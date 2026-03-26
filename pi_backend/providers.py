@@ -53,15 +53,25 @@ class OpenAIProvider(LLMProvider):
         self,
         question: str,
         contexts: List[dict],
+        mode: str = "default",
         recent_messages: list[dict] | None = None,
         memory_summary: str | None = None,
         max_output_tokens: int | None = None,
+        corrections: list[dict] | None = None,
     ) -> ProviderAnswer:
         blocks = []
         for i, ctx in enumerate(contexts, start=1):
+            url = ctx.get('url') or ctx.get('source_file') or ctx.get('source_path') or ''
             blocks.append(
-                f"[Source {i}]\nURL: {ctx['url']}\nChunk ID: {ctx['chunk_id']}\n\n{ctx['text']}"
+                f"[Source {i}]\nURL: {url}\nChunk ID: {ctx.get('chunk_id', i)}\n\n{ctx.get('text', '')}"
             )
+
+        corrections_block = ""
+        if corrections:
+            lines = []
+            for c in corrections:
+                lines.append(f"Q: {c['question']}\nCorrected Answer: {c['corrected_answer']}")
+            corrections_block = "\n\nPrevious corrections — if any are relevant to the current question, prefer the corrected answer:\n" + "\n---\n".join(lines)
 
         history_lines = []
         for message in (recent_messages or []):
@@ -70,7 +80,39 @@ class OpenAIProvider(LLMProvider):
             if content:
                 history_lines.append(f"- {role}: {content}")
 
-        prompt = f"""
+        if mode == "reporting":
+            prompt = f"""
+You are Beisser AI, an expert SQL Reporting Assistant for the AgilitySQL database.
+
+Your goal is to help users build accurate reporting queries using ONLY the provided schema documentation and reporting patterns.
+
+Rules for Reporting:
+- ALWAYS join on business keys (e.g., `so_id`, `po_id`, `item_ptr`, `cust_guid`), NEVER on `prrowid`.
+- Use the narrowest stable join identified in the documentation.
+- Pick the correct report grain (e.g., `so_header` for orders, `so_detail` for lines).
+- State your confidence if you are inferring a join that isn't explicitly confirmed.
+- Use aliases consistently: `s` (so_header), `sod` (so_detail), `sh` (shipments_header), `sd` (shipments_detail), `i` (item), `c` (cust), `st` (cust_shipto).
+- Add date filters early on large tables like `item_activity` or `shipments_detail`.
+
+Formatting rules:
+- Provide clean, professional SQL and Markdown.
+- Explain the logic behind the joins you choose.
+- End with 2-4 follow-up questions under `## Related Questions`. Write them as questions the USER would ask next (e.g., "How do I filter by date?", "What is the grain of item_activity?"). Never phrase them as offers from you.
+
+Conversation memory summary:
+{memory_summary or 'No summary available.'}
+
+Recent conversation turns:
+{chr(10).join(history_lines) if history_lines else '- No recent turns available.'}
+
+Question:
+{question}
+
+Reporting Knowledge Sources:
+{chr(10).join(blocks)}
+"""
+        else:
+            prompt = f"""
 You are Beisser AI, an intelligent assistant for the DMSI Agility documentation.
 
 Answer the user's question accurately using ONLY the provided documentation excerpts.
@@ -86,8 +128,8 @@ Formatting rules:
 - If the documentation is ambiguous or incomplete, say that plainly.
 - When citing where information came from, reference the relevant source numbers like `(Source 1)`.
 - Do not invent features, settings, or steps that are not supported by the provided excerpts.
-- End with 2-4 practical and relevant follow-up questions under `## Related Questions`.
-- Do not include a separate Sources section in your answer.
+- End with 2-4 follow-up questions under `## Related Questions`. Write them as questions the USER would ask next (e.g., "How do I...", "What happens if...", "Can I..."). Never phrase them as offers from you ("Would you like me to...", "Do you want me to...").
+- Do not include a separate Sources section in your answer.{corrections_block}
 
 Conversation memory summary:
 {memory_summary or 'No summary available.'}

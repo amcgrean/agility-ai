@@ -163,15 +163,19 @@ def main() -> None:
     embedding_inputs = build_embedding_inputs(chunks)
     embeddings: list[list[float]] = []
 
-    for batch in batched(embedding_inputs, args.batch_size):
+    print(f"Generating embeddings for {len(chunks)} chunks...")
+    for i, batch in enumerate(batched(embedding_inputs, args.batch_size)):
+        print(f"  Processing batch {i+1}...")
         response = client.embeddings.create(model=embed_model, input=batch)
         embeddings.extend(item.embedding for item in response.data)
 
+    print("Building FAISS index...")
     matrix = np.array(embeddings, dtype="float32")
     faiss.normalize_L2(matrix)
     index = faiss.IndexFlatIP(matrix.shape[1])
     index.add(matrix)
 
+    print("Writing artifacts...")
     meta_path = out_dir / "agility_meta.jsonl"
     index_path = out_dir / "agility.index"
     write_jsonl(meta_path, chunks)

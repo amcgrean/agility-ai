@@ -8,12 +8,22 @@ Current repo/workspace:
   - PR URL: `https://github.com/amcgrean/agility-ai/pull/new/codex/ingestion-runtime-deploy`
 - There are unrelated local frontend changes in `src/` that should not be reverted or mixed into backend work unless explicitly requested.
 
-Recent UI/UX and Branding Updates:
-- **App Rebranded to Beisser AI**: The application has been renamed from "Agility AI" to "Beisser AI" across the UI (TopBar, MessageInput, ChatPage, etc.) and backend title tags.
-- **Response Style Refinement**: The rigid "Short Answer" / "Key Details" structure in the LLM prompt has been removed in favor of a more natural, professional Markdown style. The assistant now identifies as "Beisser AI".
-- **Mobile UI Improvements**: Verified recent GitHub activity:
-  - PR #4 ("Optimize ChatMessage markdown rendering...") merged, improving responsiveness through rendering optimizations.
-  - Commit `48b6623` ("Improve mobile responsiveness") directly improved mobile layout.
+Recent Updates & Achievements:
+- **App Rebranded to Beisser AI**: Fully renamed from "Agility AI" to "Beisser AI" across all UI, backend, and LLM persona.
+- **PWA Implementation**: Added a custom logo, `manifest.json`, and `sw.js`. Optimized for mobile using `h-dvh`.
+- **Independent Scrolling Fix**: Applied `min-h-0` to the flex hierarchy in `ChatPage.jsx` to allow the message list to scroll independently of the sticky sidebar and input.
+- **Codex Mobile Patch Merge**: Integrated "sticky chat input" and other mobile-first CSS tweaks.
+- **Deployment**: Synced to GitHub `main` and fully deployed to the Raspberry Pi.
+
+What I Learned (Technical Notes):
+- **Flexbox Scrolling**: Use `min-h-0` on flex items that should scroll with `overflow-y-auto`.
+- **PWA Layout**: `h-dvh` prevents mobile browser chrome from jumping or hiding the app UI.
+- **Pi Sync**: If the Pi git state is "dirty", use `git reset --hard origin/main` to allow clean pulling.
+
+Future Handover Tasks:
+- **OCR Improvements**: 3 mobile-app PDFs still fail to extract text via standard PyMuPDF. Monitor Tesseract status or try a cloud OCR if needed.
+- **PWA Enhancements**: Improve offline capabilities in `sw.js`.
+- **UI Tweaks**: Fine-tune the "Beisser AI" persona tone based on user feedback.
 
 What is already done:
 - A document ingestion pipeline now exists under `pi_backend/scripts/`:

@@ -1,5 +1,6 @@
-import { FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Trash2 } from 'lucide-react';
+import { FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Trash2, BarChart3, MessageSquare } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 
 function ConversationRow({
   conversation,
@@ -172,6 +173,10 @@ export default function Sidebar({
 }) {
   const [editing, setEditing] = useState(null);
   const [title, setTitle] = useState('');
+  const location = useLocation();
+
+  const isReporting = location.pathname === '/reporting';
+  const isGeneral = location.pathname === '/';
 
   const grouped = useMemo(() => {
     const byFolder = folders
@@ -200,7 +205,7 @@ export default function Sidebar({
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         } ${collapsed ? 'md:w-16' : 'md:w-80'} w-[min(21rem,calc(100vw-2rem))]`}
       >
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="mb-6 flex items-center justify-between gap-2">
           <button
             onClick={onToggle}
             className="hidden rounded-md p-2 hover:bg-slate-800 md:inline-flex"
@@ -210,32 +215,62 @@ export default function Sidebar({
           </button>
           <div className="flex flex-1 items-center justify-between gap-2 md:justify-end">
             <p className={`text-sm font-semibold text-slate-300 md:hidden ${collapsed ? 'sr-only' : ''}`}>
-              Conversations
+              Agility AI
             </p>
             {!collapsed && (
-              <div className="flex items-center gap-2">
-                <button
-                  className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
-                  onClick={async () => {
-                    const nextTitle = window.prompt('Folder name');
-                    if (nextTitle?.trim()) await onCreateFolder(nextTitle.trim());
-                  }}
-                >
-                  <FolderPlus size={16} /> Folder
-                </button>
-                <button
-                  className="flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-2 text-sm text-white transition hover:bg-emerald-600"
-                  onClick={() => {
-                    onCreate();
-                    onCloseMobile?.();
-                  }}
-                >
-                  <Plus size={16} /> New chat
-                </button>
-              </div>
+              <button
+                className="flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-2 text-sm text-white transition hover:bg-emerald-600"
+                onClick={() => {
+                  onCreate();
+                  onCloseMobile?.();
+                }}
+              >
+                <Plus size={16} /> New chat
+              </button>
             )}
           </div>
         </div>
+
+        {!collapsed && (
+          <nav className="mb-6 space-y-1">
+            <Link
+              to="/"
+              onClick={onCloseMobile}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                isGeneral ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+              }`}
+            >
+              <MessageSquare size={18} className={isGeneral ? 'text-emerald-400' : ''} />
+              General Chat
+            </Link>
+            <Link
+              to="/reporting"
+              onClick={onCloseMobile}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                isReporting ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+              }`}
+            >
+              <BarChart3 size={18} className={isReporting ? 'text-blue-400' : ''} />
+              Reporting Expert
+            </Link>
+          </nav>
+        )}
+
+        {!collapsed && (
+          <div className="mb-3 flex items-center justify-between px-2">
+            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">History</p>
+            <button
+              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              onClick={async () => {
+                const nextTitle = window.prompt('Folder name');
+                if (nextTitle?.trim()) await onCreateFolder(nextTitle.trim());
+              }}
+              title="Create Folder"
+            >
+              <FolderPlus size={15} />
+            </button>
+          </div>
+        )}
 
         {!collapsed && (
           <div className="space-y-4 overflow-y-auto pr-1">

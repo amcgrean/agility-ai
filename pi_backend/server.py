@@ -41,6 +41,8 @@ MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "9000"))
 MIN_RERANK_SCORE = float(os.getenv("MIN_RERANK_SCORE", "0.1"))
 MAX_RECENT_MESSAGES = int(os.getenv("MAX_RECENT_MESSAGES", "6"))
 CONVERSATION_SUMMARY_TRIGGER_MESSAGES = int(os.getenv("CONVERSATION_SUMMARY_TRIGGER_MESSAGES", "12"))
+SUMMARY_REFRESH_INTERVAL = max(1, CONVERSATION_SUMMARY_TRIGGER_MESSAGES // 2)
+PROMPT_STARTERS_CACHE_TTL = float(os.getenv("PROMPT_STARTERS_CACHE_TTL", "60"))
 MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "700"))
 REQUEST_CACHE_TTL_SECONDS = int(os.getenv("REQUEST_CACHE_TTL_SECONDS", "300"))
 ENABLE_DEBUG_MODE = os.getenv("ENABLE_DEBUG_MODE", "false").lower() == "true"
@@ -80,7 +82,9 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 provider = OpenAIProvider()
 index: faiss.Index | None = None
 meta: list[dict[str, Any]] = []
+reporting_meta: list[dict[str, Any]] = []
 retrieval_lock = threading.Lock()
+_prompt_starters_cache: dict[str, tuple[float, dict]] = {}
 
 
 def load_retrieval_artifacts() -> dict[str, Any]:
@@ -105,11 +109,19 @@ def load_retrieval_artifacts() -> dict[str, Any]:
 
         index = faiss.read_index(str(INDEX_FILE))
         meta = loaded_meta
+        
+        # Load reporting skill if available
+        reporting_file = DATA_DIR / "ingest_output" / "agility_reporting_v1" / "chunks.jsonl"
+        if reporting_file.exists():
+            with open(reporting_file, "r", encoding="utf-8") as handle:
+                reporting_meta = [json.loads(line) for line in handle if line.strip()]
+        
         return {
             "ready": True,
             "indexPath": str(INDEX_FILE),
             "metaPath": str(META_FILE),
             "chunkCount": len(meta),
+            "reportingChunkCount": len(reporting_meta),
             "contentDomains": sorted({item.get("content_domain") for item in meta if item.get("content_domain")}),
             "accessScopes": sorted({item.get("access_scope") for item in meta if item.get("access_scope")}),
         }
@@ -133,6 +145,7 @@ if UPLOADS_DIR.exists():
 class AskRequest(BaseModel):
     question: str
     conversationId: str | None = None
+    mode: str = "default"
 
 
 class ConversationCreateRequest(BaseModel):
@@ -329,6 +342,7 @@ def init_db() -> None:
         ensure_column(conn, "conversations", "training_consent", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "conversations", "memory_summary", "TEXT")
         ensure_column(conn, "engagement_events", "user_identity", "TEXT NOT NULL DEFAULT 'local'")
+        ensure_column(conn, "ask_analytics", "top_retrieval_score", "REAL")
         ensure_column(conn, "ask_analytics", "conversation_id", "TEXT")
 
 
@@ -456,7 +470,7 @@ def get_conversation_context(conversation_id: str, user_identity: str) -> tuple[
     memory_summary = row["memory_summary"] if row else None
 
     should_refresh_summary = len(messages) >= CONVERSATION_SUMMARY_TRIGGER_MESSAGES and (
-        memory_summary is None or len(messages) % CONVERSATION_SUMMARY_TRIGGER_MESSAGES == 0
+        memory_summary is None or len(messages) % SUMMARY_REFRESH_INTERVAL == 0
     )
     if should_refresh_summary:
         try:
@@ -963,6 +977,7 @@ def record_ask_analytics(
     usage: dict,
     estimated_cost: float,
     cache_hit: bool,
+    top_retrieval_score: float | None = None,
 ) -> None:
     input_tokens = int(usage.get("input_tokens", 0) or 0)
     output_tokens = int(usage.get("output_tokens", 0) or 0)
@@ -979,9 +994,10 @@ def record_ask_analytics(
                 input_tokens,
                 output_tokens,
                 estimated_cost_usd,
+                top_retrieval_score,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid.uuid4()),
@@ -993,6 +1009,7 @@ def record_ask_analytics(
                 input_tokens,
                 output_tokens,
                 estimated_cost,
+                top_retrieval_score,
                 now_iso(),
             ),
         )
@@ -1013,6 +1030,11 @@ def summarize_feedback() -> list[dict]:
 
 
 def build_prompt_starters(user_identity: str, limit: int = 6) -> dict[str, list[dict]]:
+    now_ts = datetime.utcnow().timestamp()
+    cached_entry = _prompt_starters_cache.get(user_identity)
+    if cached_entry and now_ts - cached_entry[0] < PROMPT_STARTERS_CACHE_TTL:
+        return cached_entry[1]
+
     created_at_local = analytics_created_at_local_sql()
     with get_db() as conn:
         trending_rows = conn.execute(
@@ -1107,11 +1129,13 @@ def build_prompt_starters(user_identity: str, limit: int = 6) -> dict[str, list[
         if len(related_topics) >= limit:
             break
 
-    return {
+    result = {
         "starters": starters[:limit],
         "trendingQuestions": trending_questions[:limit],
         "relatedTopics": related_topics[:limit],
     }
+    _prompt_starters_cache[user_identity] = (datetime.utcnow().timestamp(), result)
+    return result
 
 
 def extract_follow_up_questions(answer_text: str) -> list[str]:
@@ -1149,6 +1173,45 @@ def looks_like_correction(text: str) -> bool:
     if any(normalized.startswith(prefix) for prefix in CORRECTION_CUE_PREFIXES):
         return True
     return "wrong" in normalized or "should have" in normalized or "not " in normalized
+
+
+def get_relevant_corrections(question: str, limit: int = 4) -> list[dict]:
+    """Return past corrections whose question has meaningful word overlap with the current question."""
+    normalized = normalize_question(question)
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    (SELECT content FROM messages
+                     WHERE conversation_id = ee.conversation_id
+                       AND role = 'user'
+                       AND created_at < (SELECT created_at FROM messages WHERE id = ee.message_id LIMIT 1)
+                     ORDER BY created_at DESC LIMIT 1) AS original_question,
+                    json_extract(ee.metadata_json, '$.correctedAnswer') AS corrected_answer
+                FROM engagement_events ee
+                WHERE ee.event_type = 'response_correction_submitted'
+                  AND ee.message_id IS NOT NULL
+                  AND json_extract(ee.metadata_json, '$.correctedAnswer') IS NOT NULL
+                ORDER BY ee.created_at DESC
+                LIMIT ?
+                """,
+                (limit * 6,),
+            ).fetchall()
+    except Exception:
+        return []
+
+    results: list[dict] = []
+    for row in rows:
+        q = (row["original_question"] or "").strip()
+        corrected = (row["corrected_answer"] or "").strip()
+        if not q or not corrected:
+            continue
+        if jaccard_similarity(normalized, normalize_question(q)) > 0.2:
+            results.append({"question": q, "corrected_answer": corrected})
+        if len(results) >= limit:
+            break
+    return results
 
 
 def collect_follow_up_correction_text(messages: list[sqlite3.Row], assistant_index: int) -> str | None:
@@ -1992,7 +2055,7 @@ def ask(req: AskRequest, request: Request):
         require_conversation_access(req.conversationId, user_identity)
 
     cache_scope = req.conversationId or "global"
-    cache_key = sha256(f"{user_identity}:{cache_scope}:{normalized_question}".encode("utf-8")).hexdigest()
+    cache_key = sha256(f"{user_identity}:{cache_scope}:{req.mode}:{normalized_question}".encode("utf-8")).hexdigest()
     cached = get_cached_answer(cache_key)
     if cached:
         record_ask_analytics(
@@ -2008,15 +2071,21 @@ def ask(req: AskRequest, request: Request):
         return cached
 
     try:
-        emb = provider.embedding(question)
-        q = np.array([emb]).astype("float32")
-        faiss.normalize_L2(q)
+        if req.mode == "reporting" and reporting_meta:
+            contexts = reporting_meta
+        else:
+            emb = provider.embedding(question)
+            q = np.array([emb]).astype("float32")
+            faiss.normalize_L2(q)
 
-        distances, indices = index.search(q, RETRIEVAL_TOP_K_CANDIDATES)
-        contexts = select_contexts(question, indices, distances)
+            distances, indices = index.search(q, RETRIEVAL_TOP_K_CANDIDATES)
+            contexts = select_contexts(question, indices, distances)
     except Exception as exc:
         logger.exception("Failed during retrieval for conversation %s", req.conversationId)
         raise HTTPException(status_code=502, detail="Unable to retrieve supporting documentation right now") from exc
+
+    top_retrieval_score = contexts[0].get("retrieval_score") if contexts else None
+    corrections = get_relevant_corrections(question) if req.mode != "reporting" else []
 
     recent_messages: list[dict] = []
     memory_summary: str | None = None
@@ -2026,9 +2095,11 @@ def ask(req: AskRequest, request: Request):
         answer_result: ProviderAnswer = provider.answer(
             question,
             contexts,
+            mode=req.mode,
             recent_messages=recent_messages,
             memory_summary=memory_summary,
             max_output_tokens=MAX_OUTPUT_TOKENS,
+            corrections=corrections,
         )
     except Exception as exc:
         logger.exception("Failed to generate answer for conversation %s", req.conversationId)
@@ -2078,6 +2149,7 @@ def ask(req: AskRequest, request: Request):
         usage=usage,
         estimated_cost=estimated_cost,
         cache_hit=False,
+        top_retrieval_score=top_retrieval_score,
     )
     put_cached_answer(cache_key, payload)
     return payload

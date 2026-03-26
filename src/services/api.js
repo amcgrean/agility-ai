@@ -113,10 +113,10 @@ export const conversationService = {
     }
   },
 
-  async ask(question, conversationId) {
+  async ask(question, conversationId, mode = 'default') {
     const response = await request('/ask', {
       method: 'POST',
-      body: JSON.stringify({ question, conversationId }),
+      body: JSON.stringify({ question, conversationId, mode }),
     });
 
     return response;

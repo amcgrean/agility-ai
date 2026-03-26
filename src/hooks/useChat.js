@@ -115,7 +115,7 @@ export function useChat() {
     );
   }
 
-  async function sendMessage(question, attachments = []) {
+  async function sendMessage(question, attachments = [], mode = 'default') {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion) return;
 
@@ -158,7 +158,7 @@ export function useChat() {
 
     setIsLoading(true);
     try {
-      const response = await conversationService.ask(trimmedQuestion, conversationId);
+      const response = await conversationService.ask(trimmedQuestion, conversationId, mode);
       const answer = response.answer || '';
       const finalMessage = {
         ...assistantShell,
