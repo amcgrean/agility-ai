@@ -58,7 +58,7 @@ class MCPDocStore:
                             filter(
                                 None,
                                 [
-                    row.get("title", ""),
+                    row.get("title") or row.get("doc_title", ""),
                     row.get("source_title", ""),
                     row.get("section_title", ""),
                     row.get("portal_section", ""),
@@ -70,8 +70,10 @@ class MCPDocStore:
                         )
                     )
                     row["_token_set"] = set(tokens)
-                    row["_title_tokens"] = set(tokenize(row.get("title", "")))
-                    uri = row["uri"]
+                    row["_title_tokens"] = set(tokenize(row.get("title") or row.get("doc_title", "")))
+                    uri = row.get("uri") or row.get("id")
+                    if not uri:
+                        continue
                     self.rows.append(row)
                     self.by_uri[uri] = row
                     self.by_doc_id[row["doc_id"]].append(row)
@@ -135,7 +137,7 @@ class MCPDocStore:
             title_overlap = query_tokens & row["_title_tokens"]
             score = float(len(overlap)) + (2.5 * len(title_overlap))
 
-            title = (row.get("title") or "").lower()
+            title = (row.get("title") or row.get("doc_title") or "").lower()
             text = (row.get("text") or "").lower()
             lowered_query = query.lower()
             if lowered_query and lowered_query in title:
@@ -161,10 +163,10 @@ class MCPDocStore:
         for score, row in scored[: max(1, min(top_k, 20))]:
             results.append(
                 {
-                    "uri": row["uri"],
+                    "uri": row.get("uri") or row.get("id"),
                     "doc_id": row["doc_id"],
                     "chunk_id": row["chunk_id"],
-                    "title": row.get("title"),
+                    "title": row.get("title") or row.get("doc_title"),
                     "source_title": row.get("source_title"),
                     "corpus_name": row.get("corpus_name"),
                     "section_title": row.get("section_title"),
@@ -195,7 +197,7 @@ class MCPDocStore:
             raise KeyError(uri)
 
         header_lines = [
-            f"Title: {row.get('title') or 'Untitled'}",
+            f"Title: {row.get('title') or row.get('doc_title') or 'Untitled'}",
             f"Section Title: {row.get('section_title') or 'N/A'}",
             f"URI: {row['uri']}",
             f"Doc ID: {row.get('doc_id')}",
@@ -319,7 +321,7 @@ def build_server(store: MCPDocStore) -> FastMCP:
             "uri": uri,
             "doc_id": row.get("doc_id"),
                 "chunk_id": row.get("chunk_id"),
-                "title": row.get("title"),
+                "title": row.get("title") or row.get("doc_title"),
                 "corpus_name": row.get("corpus_name"),
                 "section_title": row.get("section_title"),
                 "page_number": row.get("page_number"),
