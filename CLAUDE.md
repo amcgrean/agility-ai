@@ -4,6 +4,26 @@ This file is read automatically by Claude Code at the start of every session.
 
 ---
 
+## Agility Docs MCP (Local Knowledge Search)
+
+An MCP server is wired into this project at `.claude/settings.json`. It gives Claude Code searchable access to all 2319 Agility documentation chunks (254 source documents) directly from the local `pi_backend/agility_meta.jsonl` file — no Pi connection needed.
+
+**Available MCP tools:**
+| Tool | What it does |
+|------|-------------|
+| `search_docs` | Keyword search across all Agility doc chunks. Supports filtering by `corpus_name`, `content_domain`, `portal_section`, `source_type`. |
+| `get_doc_chunk` | Fetch full text of a specific chunk by its URI. |
+| `list_doc_chunks` | Browse all chunks of a document sequentially by `doc_id`. |
+| `corpus_stats` | See chunk counts, domains, portal sections, source types covered. |
+
+**When to use it:** When a user asks something about Agility features, security, reports, GL/AR/AP setup, or any DMSI-specific process — search here before relying on general knowledge. Prefer `search_docs` with a specific keyword phrase.
+
+**Corpus coverage:** product docs, training docs, internal docs (DMSI Guides, System Admins portal, Warehouse portal, Uncategorized). Does NOT include the 14-chunk Reporting Skill corpus (those are loaded separately in `server.py`).
+
+**Limitation:** Uses token-overlap scoring (not vector search). Miss rate is higher on semantic queries — try alternate keyword phrasings if the first search is empty.
+
+---
+
 ## Project Overview
 
 **Beisser AI** is an internal RAG (Retrieval-Augmented Generation) chatbot for Beisser Lumber, built on a Raspberry Pi. It answers questions from the DMSI Agility documentation corpus and supports a specialized SQL Reporting Expert mode.

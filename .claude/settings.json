@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agility-docs": {
+      "command": "C:\\Python314\\python.exe",
+      "args": [
+        "pi_backend/scripts/agility_mcp_server.py",
+        "--export-file", "pi_backend/agility_meta.jsonl"
+      ],
+      "cwd": "C:\\Users\\amcgrean\\python\\agility ai"
+    }
+  }
+}
