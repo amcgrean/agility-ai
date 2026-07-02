@@ -8,7 +8,7 @@ import MessageInput from '../components/MessageInput';
 import { conversationService } from '../services/api';
 import { useChat } from '../hooks/useChat';
 
-export default function ReportingPage() {
+export default function SkillPage({ skill }) {
   const {
     conversations,
     folders,
@@ -81,8 +81,8 @@ export default function ReportingPage() {
       .join('\n');
     const lines = doc.splitTextToSize(content || 'No messages', 180);
     doc.text(lines, 10, 10);
-    doc.save(`${activeConversation.title || 'reporting-session'}.pdf`);
-  }, [activeConversation, messages]);
+    doc.save(`${activeConversation.title || skill.exportName}.pdf`);
+  }, [activeConversation, messages, skill.exportName]);
 
   const shareConversation = useCallback(() => {
     if (!activeConversationId) return;
@@ -92,8 +92,8 @@ export default function ReportingPage() {
   }, [activeConversationId]);
 
   const handleSendMessage = useCallback((text, attachments) => {
-    sendMessage(text, attachments, 'reporting');
-  }, [sendMessage]);
+    sendMessage(text, attachments, skill.mode);
+  }, [sendMessage, skill.mode]);
 
   const handleSuggestionClick = useCallback(async (suggestion, message) => {
     conversationService.trackEngagement({
@@ -101,38 +101,38 @@ export default function ReportingPage() {
       conversationId: activeConversationId,
       messageId: message.id,
       label: suggestion,
-      metadata: { source: 'reporting_related_questions', mode: 'reporting' },
+      metadata: { source: skill.followUpSource, mode: skill.mode },
     });
-    sendMessage(suggestion, [], 'reporting');
-  }, [activeConversationId, sendMessage]);
+    sendMessage(suggestion, [], skill.mode);
+  }, [activeConversationId, sendMessage, skill.followUpSource, skill.mode]);
 
   const handleMessageDislike = useCallback(async (message) => {
     await conversationService.trackEngagement({
       eventType: 'response_thumbed_down',
       conversationId: activeConversationId,
       messageId: message.id,
-      label: activeConversation?.title || 'reporting_response',
+      label: activeConversation?.title || `${skill.mode}_response`,
       metadata: {
-        source: 'reporting_expert',
-        mode: 'reporting',
+        source: skill.engagementSource,
+        mode: skill.mode,
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
-  }, [activeConversationId, activeConversation?.title]);
+  }, [activeConversationId, activeConversation?.title, skill.engagementSource, skill.mode]);
 
   const handleMessageLike = useCallback(async (message) => {
     await conversationService.trackEngagement({
       eventType: 'response_thumbed_up',
       conversationId: activeConversationId,
       messageId: message.id,
-      label: activeConversation?.title || 'reporting_response',
+      label: activeConversation?.title || `${skill.mode}_response`,
       metadata: {
-        source: 'reporting_expert',
-        mode: 'reporting',
+        source: skill.engagementSource,
+        mode: skill.mode,
         responsePreview: (message.content || '').slice(0, 300),
       },
     });
-  }, [activeConversationId, activeConversation?.title]);
+  }, [activeConversationId, activeConversation?.title, skill.engagementSource, skill.mode]);
 
   const handleMessageCorrection = useCallback(async (message, correctedAnswer, notes) => {
     if (!activeConversationId) {
@@ -141,13 +141,6 @@ export default function ReportingPage() {
 
     return conversationService.submitCorrection(activeConversationId, message.id, correctedAnswer, notes);
   }, [activeConversationId]);
-
-  const reportingPrompts = [
-    { label: "How do I join item activity to orders?", icon: "📊" },
-    { label: "What is the grain of the so_detail table?", icon: "🎯" },
-    { label: "Give me a template for a sales by customer report", icon: "📑" },
-    { label: "Show business key joins for shipments", icon: "🔗" }
-  ];
 
   return (
     <main className="flex h-dvh overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -185,18 +178,18 @@ export default function ReportingPage() {
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4 md:pb-6">
               {messages.length === 0 ? (
                 <section className="space-y-6">
-                  <div className="rounded-3xl border border-blue-500/20 bg-blue-500/5 p-6 shadow-sm dark:border-blue-500/30 dark:bg-blue-900/10 sm:p-8">
-                    <p className="text-xs font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-400">Reporting Expert Mode</p>
-                    <h2 className="mt-3 text-2xl font-semibold text-slate-900 dark:text-white sm:text-3xl">SQL Schema & Reporting Specialist</h2>
+                  <div className={`rounded-3xl border p-6 shadow-sm sm:p-8 ${skill.theme.hero}`}>
+                    <p className={`text-xs font-bold uppercase tracking-[0.24em] ${skill.theme.badge}`}>{skill.badge}</p>
+                    <h2 className="mt-3 text-2xl font-semibold text-slate-900 dark:text-white sm:text-3xl">{skill.title}</h2>
                     <p className="mt-2 max-w-2xl text-sm text-slate-500 dark:text-slate-400 sm:text-base">
-                      This specialized interface uses Agility Reporting best practices. Ask about table grains, business key joins, and SQL patterns for the AgilitySQL schema.
+                      {skill.description}
                     </p>
                     <div className="mt-8 grid gap-4 sm:grid-cols-2">
-                       {reportingPrompts.map((prompt) => (
+                       {skill.prompts.map((prompt) => (
                          <button
                            key={prompt.label}
                            onClick={() => setDraft(prompt.label)}
-                           className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-500/40 hover:bg-blue-50/50 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:bg-blue-900/20"
+                           className={`flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left transition dark:border-slate-800 dark:bg-slate-900/50 ${skill.theme.promptCard}`}
                          >
                            <span className="text-xl">{prompt.icon}</span>
                            <span className="text-sm font-medium">{prompt.label}</span>
@@ -204,13 +197,13 @@ export default function ReportingPage() {
                        ))}
                     </div>
                   </div>
-                  
+
                   <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 dark:border-amber-500/30 dark:bg-amber-900/10">
-                    <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-400">⚠️ Reporting Rules</h3>
+                    <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-400">{skill.rules.title}</h3>
                     <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-amber-700 dark:text-amber-300">
-                      <li>Never join on <code>prrowid</code>; always use business keys.</li>
-                      <li>Be mindful of the grain (header vs detail).</li>
-                      <li>Tables like <code>item_activity</code> need date filters for performance.</li>
+                      {skill.rules.items.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
                     </ul>
                   </div>
                 </section>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beisser-ai-v2';
+const CACHE_NAME = 'beisser-ai-v3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

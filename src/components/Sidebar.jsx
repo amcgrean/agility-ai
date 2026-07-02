@@ -1,6 +1,7 @@
-import { FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Trash2, BarChart3, MessageSquare } from 'lucide-react';
+import { FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Trash2, MessageSquare } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { SKILLS } from '../skills';
 
 function ConversationRow({
   conversation,
@@ -175,7 +176,6 @@ export default function Sidebar({
   const [title, setTitle] = useState('');
   const location = useLocation();
 
-  const isReporting = location.pathname === '/reporting';
   const isGeneral = location.pathname === '/';
 
   const grouped = useMemo(() => {
@@ -243,16 +243,23 @@ export default function Sidebar({
               <MessageSquare size={18} className={isGeneral ? 'text-emerald-400' : ''} />
               General Chat
             </Link>
-            <Link
-              to="/reporting"
-              onClick={onCloseMobile}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                isReporting ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
-              }`}
-            >
-              <BarChart3 size={18} className={isReporting ? 'text-blue-400' : ''} />
-              Reporting Expert
-            </Link>
+            {SKILLS.map((skill) => {
+              const isActive = location.pathname === skill.path;
+              const NavIcon = skill.NavIcon;
+              return (
+                <Link
+                  key={skill.mode}
+                  to={skill.path}
+                  onClick={onCloseMobile}
+                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    isActive ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                  }`}
+                >
+                  <NavIcon size={18} className={isActive ? skill.theme.navIconActive : ''} />
+                  {skill.navLabel}
+                </Link>
+              );
+            })}
           </nav>
         )}
 
