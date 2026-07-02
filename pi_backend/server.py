@@ -149,6 +149,15 @@ def ensure_retrieval_ready() -> None:
         if not status.get("ready"):
             raise HTTPException(status_code=503, detail="Retrieval index is not ready")
 
+
+def ensure_skill_ready(mode: str) -> None:
+    if not skill_meta.get(mode):
+        with retrieval_lock:
+            load_skill_corpora()
+    if not skill_meta.get(mode):
+        label = SKILL_REGISTRY[mode]["label"]
+        raise HTTPException(status_code=503, detail=f"The {label} knowledge pack is not loaded on this server")
+
 app = FastAPI()
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -2085,7 +2094,13 @@ def ask(req: AskRequest, request: Request):
     user_identity = resolve_user_identity(request)
     question = sanitize_question(req.question)
     normalized_question = normalize_question(question)
-    ensure_retrieval_ready()
+    # Skill modes answer from their curated corpus and never fall back to
+    # generic retrieval — a skill persona prompt with generic doc chunks would
+    # be answering from the wrong sources.
+    if req.mode in SKILL_REGISTRY:
+        ensure_skill_ready(req.mode)
+    else:
+        ensure_retrieval_ready()
 
     if req.conversationId:
         require_conversation_access(req.conversationId, user_identity)
@@ -2107,9 +2122,8 @@ def ask(req: AskRequest, request: Request):
         return cached
 
     try:
-        skill_contexts = skill_meta.get(req.mode, [])
-        if skill_contexts:
-            contexts = skill_contexts
+        if req.mode in SKILL_REGISTRY:
+            contexts = skill_meta[req.mode]
         else:
             emb = provider.embedding(question)
             q = np.array([emb]).astype("float32")
