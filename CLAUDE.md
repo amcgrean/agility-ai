@@ -26,7 +26,7 @@ An MCP server is wired into this project at `.claude/settings.json`. It gives Cl
 
 ## Project Overview
 
-**Beisser AI** is an internal RAG (Retrieval-Augmented Generation) chatbot for Beisser Lumber, built on a Raspberry Pi. It answers questions from the DMSI Agility documentation corpus and supports a specialized SQL Reporting Expert mode.
+**Beisser AI** is an internal RAG (Retrieval-Augmented Generation) chatbot for Beisser Lumber, built on a Raspberry Pi. It answers questions from the DMSI Agility documentation corpus and supports skill expert modes (SQL Reporting Expert, Sales Order Expert) backed by curated knowledge packs in `skills/`.
 
 - **Live URL**: `agility.beisser.cloud`
 - **GitHub**: `https://github.com/amcgrean/agility-ai` (branch: `main`)
@@ -52,7 +52,11 @@ An MCP server is wired into this project at `.claude/settings.json`. It gives Cl
 # 1. Build frontend locally
 npm run build
 
-# 2. Package (dist/ → pi_backend/ui/, plus backend files)
+# 2. Regenerate skill corpora (repo-hosted skills; reporting still comes from OneDrive)
+python pi_backend/scripts/ingest_skill.py skills/agility-sales-orders
+python pi_backend/scripts/ingest_reporting_skill.py
+
+# 3. Package (dist/ → pi_backend/ui/, plus backend files and skill corpora)
 python -c "
 import zipfile
 from pathlib import Path
@@ -62,20 +66,21 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zf:
         if f.is_file():
             zf.write(f, 'pi_backend/ui/' + str(f.relative_to(base/'dist')).replace(chr(92),'/'))
     for rel in ['pi_backend/server.py', 'pi_backend/providers.py',
-                'pi_backend/ingest_output/agility_reporting_v1/chunks.jsonl']:
+                'pi_backend/ingest_output/agility_reporting_v1/chunks.jsonl',
+                'pi_backend/ingest_output/agility_sales_orders_v1/chunks.jsonl']:
         zf.write(base / rel, rel)
 "
 
-# 3. SCP single file (stable even on flaky connections)
+# 4. SCP single file (stable even on flaky connections)
 scp deploy.zip agility-ai-remote:/home/amcgrean/deploy.zip
 
-# 4. Extract (wipe old assets first to avoid stale files)
+# 5. Extract (wipe old assets first to avoid stale files)
 ssh agility-ai-remote "rm -rf /home/amcgrean/agility-ai/pi_backend/ui/assets && cd /home/amcgrean/agility-ai && unzip -o /home/amcgrean/deploy.zip && rm /home/amcgrean/deploy.zip"
 
-# 5. Restart
+# 6. Restart
 ssh agility-ai-remote "sudo systemctl restart agility-ai && sleep 3 && systemctl is-active agility-ai"
 
-# 6. Verify
+# 7. Verify
 ssh agility-ai-remote "curl -s http://localhost:8000/health"
 ```
 
@@ -94,23 +99,37 @@ git add <files> && git commit -m "..." && git push origin main
 | `server.py` | FastAPI app — all endpoints, SQLite DB, FAISS retrieval, caching, analytics |
 | `providers.py` | OpenAI wrapper — prompt building, LLM calls, corrections injection |
 | `scripts/build_doc_index.py` | Builds FAISS index + `agility_meta.jsonl` from a chunks JSONL |
-| `scripts/ingest_reporting_skill.py` | Ingests the reporting skill markdown files into chunks |
+| `scripts/ingest_skill.py` | Generic skill ingestion — turns any `skills/<name>/` folder into a chunks corpus |
+| `scripts/ingest_reporting_skill.py` | Wrapper for the reporting skill (source still on OneDrive) |
+
+### Skills (`skills/`)
+Repo-hosted knowledge packs powering the expert modes. See `skills/README.md` for
+the full workflow. The registry lives in three places that must stay in sync:
+`SKILL_REGISTRY` (`server.py`), `SKILL_PROMPT_PROFILES` (`providers.py`), and
+`SKILLS` (`src/skills.jsx`).
+
+| Skill | Mode | Notes |
+|-------|------|-------|
+| `agility-reporting` | `reporting` | Source still on OneDrive — see `skills/agility-reporting/README.md` |
+| `agility-sales-orders` | `sales_orders` | In repo — draft knowledge pack |
 
 ### Frontend (`src/`)
 | File | Purpose |
 |------|---------|
 | `pages/ChatPage.jsx` | Main general chat UI |
-| `pages/ReportingPage.jsx` | Reporting Expert mode (AgilitySQL schema specialist) |
+| `pages/SkillPage.jsx` | Generic skill expert mode page, parameterized by a `skills.jsx` entry |
+| `skills.jsx` | Frontend skill registry — routes, nav labels, themes, prompt cards per skill |
 | `pages/AdminPage.jsx` | Usage/cost dashboard (auto-loads for expert users) |
-| `components/Sidebar.jsx` | Nav (General Chat / Reporting Expert) + conversation list |
+| `components/Sidebar.jsx` | Nav (General Chat + one link per skill) + conversation list |
 | `hooks/useChat.js` | All conversation state, sendMessage, memory |
 | `services/api.js` | All API calls to FastAPI backend |
 
 ### Key Endpoints
 | Endpoint | Auth | Notes |
 |----------|------|-------|
-| `POST /ask` | none | Main Q&A. Accepts `mode: "default"\|"reporting"` |
-| `GET /health` | none | Returns `retrievalReady`, `chunkCount` |
+| `POST /ask` | none | Main Q&A. Accepts `mode: "default"\|"reporting"\|"sales_orders"` |
+| `GET /health` | none | Returns `retrievalReady`, `chunkCount`, `skillChunkCounts` |
+| `GET /skills` | none | Lists skill modes with chunk counts and ready state |
 | `GET /admin/metrics` | expert user OR Bearer token | Dashboard data |
 | `GET /admin/retrieval-status` | expert user OR Bearer token | Chunk counts |
 | `POST /admin/reindex` | expert user OR Bearer token | Rebuild index |
@@ -126,11 +145,10 @@ git add <files> && git commit -m "..." && git push origin main
 - **Latest baseline**: `pi_backend/ingest_output/wedge_scrape_v5` (2319 chunks, 254 sources)
 - **Ingestion script**: `pi_backend/scripts/refresh_agility_docs.py`
 
-### Reporting Skill Corpus
-- **Source**: Internal markdown files at `C:\Users\indha\OneDrive - Beisser Lumber\ai\skills\agility-reporting\`
-- **Location**: `pi_backend/ingest_output/agility_reporting_v1/chunks.jsonl` (14 chunks, loaded directly — no FAISS)
-- **Ingestion script**: `pi_backend/scripts/ingest_reporting_skill.py`
-- **Loaded by**: `server.py` startup reads chunks directly into `reporting_meta` list
+### Skill Corpora (expert modes — loaded directly, no FAISS)
+- **Loaded by**: `server.py` startup reads each `ingest_output/<corpus>/chunks.jsonl` listed in `SKILL_REGISTRY` into `skill_meta[mode]`; the whole corpus is sent to the LLM on every question in that mode
+- **Reporting** (`agility_reporting_v1`, 14 chunks): source markdown still at `C:\Users\indha\OneDrive - Beisser Lumber\ai\skills\agility-reporting\`; ingest with `pi_backend/scripts/ingest_reporting_skill.py`
+- **Sales Orders** (`agility_sales_orders_v1`): source in repo at `skills/agility-sales-orders/`; ingest with `python pi_backend/scripts/ingest_skill.py skills/agility-sales-orders`
 
 ---
 
@@ -174,8 +192,9 @@ The system actively learns from corrections:
 - **Generated artifacts are gitignored**: `pi_backend/agility.index`, `pi_backend/agility_meta.jsonl`, `pi_backend/agility_ai.db`, `pi_backend/agility_cache.db`, `pi_backend/ingest_output/`
 - **The Pi venv** needs `python-multipart` installed if you ever rebuild it
 - **Admin auth**: Expert users in `EXPERT_USER_IDENTITIES` bypass the Bearer token check. The token (`ADMIN_EXPORT_TOKEN`) is in the env file on the Pi.
-- **Reporting chunks have no `url` field** — `providers.py` uses `ctx.get('url') or ctx.get('source_file')` fallback. Don't regress this.
-- **Cache key includes mode**: `{user_identity}:{conversation_id}:{mode}:{question}` — reporting and default answers won't collide.
+- **Skill chunks have no `url` field** — `providers.py` uses `ctx.get('url') or ctx.get('source_file')` fallback. Don't regress this.
+- **Cache key includes mode**: `{user_identity}:{conversation_id}:{mode}:{question}` — skill and default answers won't collide.
+- **Skill corpora must be regenerated before deploy** — `ingest_output/` is gitignored; run the ingest scripts (deploy step 2) or the Pi will keep serving the previous chunks.
 
 ---
 
@@ -193,13 +212,13 @@ Tried: PyMuPDF, pytesseract, rapidocr-onnxruntime. All fail. Likely scanned imag
 Not yet ingested. Suggested approach:
 - Output folder: `pi_backend/ingest_output/internal_docs_v1`
 - Use `--corpus-name internal_docs_v1` when building
-- At runtime, the server can load multiple corpora — see how `reporting_meta` is loaded alongside `meta` in `server.py`
+- At runtime, the server can load multiple corpora — see how `skill_meta` is loaded alongside `meta` in `server.py` (note: internal docs belong in the FAISS index, not `SKILL_REGISTRY` — skill corpora are sent to the LLM in full)
 
 ### Prompt Starters Cache Invalidation
 The in-memory `_prompt_starters_cache` dict is per-process and never evicted except by TTL. On a Pi restart it resets, which is fine. But if two users ask in rapid succession, the second user gets a 60s-old snapshot. For now this is acceptable.
 
 ### Bundle Size
-Vite warns about a 944KB JS bundle. Not a problem on LAN, but if the app ever goes public-facing, add dynamic imports for `AdminPage` and `ReportingPage`.
+Vite warns about a 944KB JS bundle. Not a problem on LAN, but if the app ever goes public-facing, add dynamic imports for `AdminPage` and `SkillPage`.
 
 ### Training Export → Active Retraining
 Corrections are captured and exportable, but the loop from export → fine-tuned model → redeployment is not automated. The export JSON is the raw material; the actual fine-tuning step is manual/future work.

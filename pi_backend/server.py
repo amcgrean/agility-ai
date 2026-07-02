@@ -82,14 +82,35 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 provider = OpenAIProvider()
 index: faiss.Index | None = None
 meta: list[dict[str, Any]] = []
-reporting_meta: list[dict[str, Any]] = []
+
+# Skill expert modes. Each skill corpus lives at ingest_output/<corpus>/chunks.jsonl
+# (built by scripts/ingest_skill.py) and is sent to the LLM in full — no FAISS.
+# Adding a skill: add it here, add a prompt profile in providers.SKILL_PROMPT_PROFILES,
+# and register it in the frontend src/skills.jsx.
+SKILL_REGISTRY: dict[str, dict[str, str]] = {
+    "reporting": {"corpus": "agility_reporting_v1", "label": "Reporting Expert"},
+    "sales_orders": {"corpus": "agility_sales_orders_v1", "label": "Sales Order Expert"},
+}
+skill_meta: dict[str, list[dict[str, Any]]] = {mode: [] for mode in SKILL_REGISTRY}
 retrieval_lock = threading.Lock()
 _prompt_starters_cache: dict[str, tuple[float, dict]] = {}
+
+
+def load_skill_corpora() -> None:
+    for mode, skill in SKILL_REGISTRY.items():
+        chunks_file = DATA_DIR / "ingest_output" / skill["corpus"] / "chunks.jsonl"
+        if chunks_file.exists():
+            with open(chunks_file, "r", encoding="utf-8") as handle:
+                skill_meta[mode] = [json.loads(line) for line in handle if line.strip()]
+        else:
+            skill_meta[mode] = []
 
 
 def load_retrieval_artifacts() -> dict[str, Any]:
     global index, meta
     with retrieval_lock:
+        load_skill_corpora()
+
         if not INDEX_FILE.exists() or not META_FILE.exists():
             index = None
             meta = []
@@ -110,18 +131,13 @@ def load_retrieval_artifacts() -> dict[str, Any]:
         index = faiss.read_index(str(INDEX_FILE))
         meta = loaded_meta
         
-        # Load reporting skill if available
-        reporting_file = DATA_DIR / "ingest_output" / "agility_reporting_v1" / "chunks.jsonl"
-        if reporting_file.exists():
-            with open(reporting_file, "r", encoding="utf-8") as handle:
-                reporting_meta = [json.loads(line) for line in handle if line.strip()]
-        
         return {
             "ready": True,
             "indexPath": str(INDEX_FILE),
             "metaPath": str(META_FILE),
             "chunkCount": len(meta),
-            "reportingChunkCount": len(reporting_meta),
+            "reportingChunkCount": len(skill_meta.get("reporting", [])),
+            "skillChunkCounts": {mode: len(chunks) for mode, chunks in skill_meta.items()},
             "contentDomains": sorted({item.get("content_domain") for item in meta if item.get("content_domain")}),
             "accessScopes": sorted({item.get("access_scope") for item in meta if item.get("access_scope")}),
         }
@@ -1459,6 +1475,23 @@ def health():
         "status": "ok",
         "retrievalReady": retrieval_ready,
         "chunkCount": len(meta),
+        "skillChunkCounts": {mode: len(chunks) for mode, chunks in skill_meta.items()},
+    }
+
+
+@app.get("/skills")
+def list_skills():
+    return {
+        "skills": [
+            {
+                "mode": mode,
+                "label": skill["label"],
+                "corpus": skill["corpus"],
+                "chunkCount": len(skill_meta.get(mode, [])),
+                "ready": bool(skill_meta.get(mode)),
+            }
+            for mode, skill in SKILL_REGISTRY.items()
+        ]
     }
 
 
@@ -2074,8 +2107,9 @@ def ask(req: AskRequest, request: Request):
         return cached
 
     try:
-        if req.mode == "reporting" and reporting_meta:
-            contexts = reporting_meta
+        skill_contexts = skill_meta.get(req.mode, [])
+        if skill_contexts:
+            contexts = skill_contexts
         else:
             emb = provider.embedding(question)
             q = np.array([emb]).astype("float32")
@@ -2088,7 +2122,7 @@ def ask(req: AskRequest, request: Request):
         raise HTTPException(status_code=502, detail="Unable to retrieve supporting documentation right now") from exc
 
     top_retrieval_score = contexts[0].get("retrieval_score") if contexts else None
-    corrections = get_relevant_corrections(question) if req.mode != "reporting" else []
+    corrections = get_relevant_corrections(question) if req.mode not in SKILL_REGISTRY else []
 
     recent_messages: list[dict] = []
     memory_summary: str | None = None
